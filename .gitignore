@@ -1,0 +1,33 @@
+# 通用
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.local
+.venv/
+venv/
+node_modules/
+
+# 后端 Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 前端
+frontend/dist/
+frontend/.cache/
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 数据库与本地数据
+*.db
+*.sqlite
+data/
