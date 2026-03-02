@@ -1,0 +1,22 @@
+"""认证相关请求/响应模型。"""
+from pydantic import BaseModel
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    user: "UserMe"
+
+
+class UserMe(BaseModel):
+    username: str
+
+    class Config:
+        from_attributes = True
+
+
+LoginResponse.model_rebuild()

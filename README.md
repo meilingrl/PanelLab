@@ -35,6 +35,7 @@
   - 后端/前端代码在 Windows 用 VS Code/Cursor 写，在 WSL 或远程 Linux 上运行与调试。
   - 涉及系统调用的部分（如执行 shell、读 `/etc`、进程列表）尽量抽象成接口，在开发机用 Mock 或 WSL 测，定期在真实 Linux 上做一次集成测试。
 - **注意**：路径、换行符、权限等要在 Linux 上验证，避免只在本机 Windows 通过就认为没问题。
+- **操作指南**：如何用 WSL2 与虚拟机做 Linux 端运行与测试，见 [docs/linux-testing-wsl-vm.md](docs/linux-testing-wsl-vm.md)。
 
 ---
 
@@ -68,7 +69,7 @@
 | 阶段 | 内容 | 产出 |
 |------|------|------|
 | **0** | 技术选型与 Hello 面板 | 前后端打通、本地可访问空白面板 |
-| **1** | 用户体系与仪表盘 | 登录/登出、仪表盘骨架与基础数据展示 |
+| **1** | 用户体系与仪表盘 | 登录/登出、仪表盘骨架与基础数据展示（已完成，见 [docs/design-login.md](docs/design-login.md)） |
 | **2** | 系统监控与进程管理 | CPU/内存/磁盘/网络监控、进程列表与操作 |
 | **3** | 网站与反向代理 | 站点 CRUD、Nginx 反向代理配置与生效 |
 | **4** | 数据库与计划任务 | MySQL 库/用户管理、计划任务（cron）管理 |
@@ -154,4 +155,11 @@ npm install
   uvicorn main:app --reload
   ```
   服务地址默认：http://localhost:8000 ；接口测试：http://localhost:8000/api/hello
-- **前端**：在 `frontend` 目录运行 `npm run dev`，浏览器打开终端提示的地址（如 http://localhost:5173 ）。页面中的「接口测试（环境检验）」会请求后端，成功则说明前后端已打通。
+- **首次使用登录功能**：建库并配置好 `.env` 后，在 `backend` 目录执行一次初始化（创建用户表并写入默认管理员）：
+  ```bash
+  python -m init_db
+  ```
+  默认管理员用户名：`admin`，密码为 `.env` 中的 `INIT_ADMIN_PASSWORD`（默认 `admin`）。之后可在登录页使用该账号登录。若需修改密码，在 `backend` 目录执行：`python change_password.py admin 你的新密码`。
+- **前端**：在 `frontend` 目录运行 `npm run dev`，浏览器打开终端提示的地址（如 http://localhost:5173 ）。登录页输入上述账号密码即可进入仪表盘。
+
+完整测试步骤（含前置条件、后端/前端启动、浏览器验证、可选 WSL 测试）见 [docs/testing-steps.md](docs/testing-steps.md)。

@@ -1,12 +1,23 @@
 """
-PanelLab 后端入口 — 阶段 0：Hello 面板与接口测试
+PanelLab 后端入口 — 阶段 0/1：Hello 面板 + 登录认证
 """
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="PanelLab", version="0.1.0")
+from database import engine, Base
+from routers import auth
 
-# 允许前端开发服务器跨域访问（接口测试 / 环境检验）
+# 建表（不插入数据，初始用户请运行 python -m init_db）
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(title="PanelLab", version="0.1.0", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -14,6 +25,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth.router)
 
 
 @app.get("/api/hello")
