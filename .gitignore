@@ -4,7 +4,9 @@ Thumbs.db
 *.log
 .env
 .env.local
+# Python venv（含 Windows 下可能出现的 .venv` 等路径）
 .venv/
+.venv*/
 venv/
 node_modules/
 
