@@ -13,7 +13,7 @@
 | 登录态校验 | 未登录访问需鉴权页时重定向到登录页 |
 | 错误提示 | 用户名或密码错误时统一提示，不区分具体原因 |
 
-本阶段不实现：注册、找回密码、多用户角色、第三方登录。
+本阶段不实现：找回密码、多用户角色、第三方登录。注册与修改密码已在本阶段完成。
 
 ---
 
@@ -24,6 +24,8 @@
 | POST | /api/auth/login | 请求体 `{ username, password }`，成功返回 `{ token, user: { username } }`，失败 401 |
 | POST | /api/auth/logout | 前端删 token 为主，后端返回 `{ message: "ok" }` |
 | GET | /api/auth/me | Header `Authorization: Bearer <token>`，返回当前用户 `{ username }`，无效 401 |
+| POST | /api/auth/register | 请求体 `{ username, password }`，用户名 2–64 字符、密码至少 6 位；成功返回同 login（token + user），失败 400（如用户名已被使用） |
+| POST | /api/auth/change-password | 需登录；请求体 `{ old_password, new_password }`，新密码至少 6 位且不能与原密码相同；成功返回 `{ message: "密码已更新，请使用新密码登录" }`，原密码错误或新密码与原密码相同则 400 |
 
 认证方式：JWT，前端将 token 存 localStorage（键 `panel_token`），请求时带在 Authorization 头。
 
@@ -39,9 +41,10 @@
 
 ## 4. 前端要点
 
-- 路由：`/login` 公开，`/` 需登录；未登录访问 `/` 重定向到 `/login?redirect=/`。
-- 登录页：居中白卡、左右分栏（Logo+品牌 / 表单）、线条背景、上浮标签、明暗主题切换。
-- 仪表盘：占位页，含主题切换与退出按钮。
+- 路由：`/login`、`/register` 公开，`/` 及其子路径需登录；未登录访问需鉴权页重定向到 `/login?redirect=...`。
+- 登录页：居中卡片、左右分栏（Logo+品牌 / 表单）、线条背景、上浮标签、主题切换、链接到注册页。
+- 注册页：风格与登录页一致，用户名/密码/确认密码，注册成功后写 token 并跳转；链接到登录页。
+- 仪表盘：见 `design-dashboard.md`；布局内提供「修改密码」入口，弹窗提交后关闭。
 
 ---
 

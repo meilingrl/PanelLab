@@ -8,11 +8,12 @@ const router = useRouter()
 const route = useRoute()
 const username = ref('')
 const password = ref('')
+const confirmPassword = ref('')
 const error = ref('')
 const loading = ref(false)
 const usernameFocused = ref(false)
 const passwordFocused = ref(false)
-const logoSrc = ref(true)
+const confirmFocused = ref(false)
 const theme = ref(getTheme())
 
 onMounted(() => {
@@ -26,26 +27,44 @@ function onToggleTheme() {
 
 const hasUsername = () => username.value.length > 0
 const hasPassword = () => password.value.length > 0
+const hasConfirm = () => confirmPassword.value.length > 0
 
 async function onSubmit() {
   error.value = ''
-  if (!username.value.trim() || !password.value) {
-    error.value = '请输入用户名和密码'
+  const u = username.value.trim()
+  if (!u) {
+    error.value = '请输入用户名'
+    return
+  }
+  if (u.length < 2) {
+    error.value = '用户名至少 2 个字符'
+    return
+  }
+  if (!password.value) {
+    error.value = '请输入密码'
+    return
+  }
+  if (password.value.length < 6) {
+    error.value = '密码至少 6 位'
+    return
+  }
+  if (password.value !== confirmPassword.value) {
+    error.value = '两次输入的密码不一致'
     return
   }
   loading.value = true
   try {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        username: username.value.trim(),
+        username: u,
         password: password.value,
       }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
-      error.value = data.detail || data.message || '用户名或密码错误'
+      error.value = data.detail || data.message || '注册失败'
       return
     }
     if (data.token) {
@@ -62,27 +81,24 @@ async function onSubmit() {
 </script>
 
 <template>
-  <div class="login">
+  <div class="register">
     <WavyLines />
     <button type="button" class="theme-toggle" :aria-label="theme === 'light' ? '切换深色' : '切换浅色'" @click="onToggleTheme">
       {{ theme === 'light' ? '🌙' : '☀️' }}
     </button>
 
     <div class="login-card">
-      <!-- 左侧：Logo + 品牌 -->
       <div class="login-left">
         <div class="brand">
-          <img v-if="logoSrc" src="/panellab-logo.png" alt="PanelLab" class="logo-img" @error="logoSrc = false" />
-          <div v-else class="logo-fallback">P</div>
+          <div class="logo-fallback">P</div>
           <h1 class="brand-name">PanelLab</h1>
-          <p class="brand-desc">服务器运维管理面板</p>
+          <p class="brand-desc">注册新账号</p>
         </div>
       </div>
 
-      <!-- 右侧：表单 -->
       <div class="login-right">
         <div class="form-card">
-          <h2 class="form-title">登录</h2>
+          <h2 class="form-title">注册</h2>
           <form @submit.prevent="onSubmit" class="form">
             <div class="field">
               <input
@@ -93,25 +109,36 @@ async function onSubmit() {
                 @focus="usernameFocused = true"
                 @blur="usernameFocused = false"
               />
-              <label for="username" :class="{ float: usernameFocused || hasUsername() }">用户名</label>
+              <label for="username" :class="{ float: usernameFocused || hasUsername() }">用户名（至少 2 位）</label>
             </div>
             <div class="field">
               <input
                 id="password"
                 v-model="password"
                 type="password"
-                autocomplete="current-password"
+                autocomplete="new-password"
                 @focus="passwordFocused = true"
                 @blur="passwordFocused = false"
               />
-              <label for="password" :class="{ float: passwordFocused || hasPassword() }">密码</label>
+              <label for="password" :class="{ float: passwordFocused || hasPassword() }">密码（至少 6 位）</label>
+            </div>
+            <div class="field">
+              <input
+                id="confirmPassword"
+                v-model="confirmPassword"
+                type="password"
+                autocomplete="new-password"
+                @focus="confirmFocused = true"
+                @blur="confirmFocused = false"
+              />
+              <label for="confirmPassword" :class="{ float: confirmFocused || hasConfirm() }">确认密码</label>
             </div>
             <p v-if="error" class="error-msg">{{ error }}</p>
             <button type="submit" class="btn-login" :disabled="loading">
-              {{ loading ? '登录中…' : '登录' }}
+              {{ loading ? '注册中…' : '注册' }}
             </button>
             <p class="switch-link">
-              没有账号？<router-link to="/register">注册</router-link>
+              已有账号？<router-link to="/login">去登录</router-link>
             </p>
           </form>
         </div>
@@ -121,7 +148,7 @@ async function onSubmit() {
 </template>
 
 <style scoped>
-.login {
+.register {
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -144,12 +171,6 @@ async function onSubmit() {
   border-radius: 8px;
   color: var(--text-primary);
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
-}
-
-.theme-toggle:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--text-muted);
 }
 
 .login-card {
@@ -171,29 +192,18 @@ async function onSubmit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
   padding: 2rem;
 }
 
 .brand {
-  position: relative;
-  z-index: 1;
   text-align: center;
   padding: 2rem;
 }
 
-.logo-img,
 .logo-fallback {
   width: 80px;
   height: 80px;
-  margin-bottom: 1rem;
-}
-
-.logo-img {
-  object-fit: contain;
-}
-
-.logo-fallback {
+  margin: 0 auto 1rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -209,7 +219,6 @@ async function onSubmit() {
   font-weight: 600;
   color: var(--text-primary);
   margin: 0 0 0.25rem 0;
-  letter-spacing: -0.02em;
 }
 
 .brand-desc {
@@ -326,21 +335,5 @@ async function onSubmit() {
 
 .switch-link a:hover {
   text-decoration: underline;
-}
-
-@media (max-width: 760px) {
-  .login-card {
-    flex-direction: column;
-    max-width: 100%;
-  }
-  .login-left {
-    padding: 2rem 1.5rem;
-  }
-  .login-right {
-    width: 100%;
-    border-left: none;
-    border-top: 1px solid var(--border);
-    padding: 1.5rem;
-  }
 }
 </style>

@@ -16,7 +16,13 @@ from sqlalchemy.orm import Session
 from config import get_settings
 from database import get_db
 from models.user import User
-from schemas.auth import LoginRequest, LoginResponse, UserMe
+from schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    LoginResponse,
+    RegisterRequest,
+    UserMe,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
@@ -84,3 +90,39 @@ def logout():
 def me(current_user: Annotated[User, Depends(get_current_user)]):
     """获取当前登录用户信息。"""
     return UserMe(username=current_user.username)
+
+
+@router.post("/register", response_model=LoginResponse)
+def register(body: RegisterRequest, db: Annotated[Session, Depends(get_db)]):
+    """注册新用户；成功后直接返回 token 与用户信息，可视为登录。"""
+    username = body.username.strip()
+    if len(username) < 2:
+        raise HTTPException(status_code=400, detail="用户名至少 2 个字符")
+    existing = db.query(User).filter(User.username == username).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="用户名已被使用")
+    user = User(
+        username=username,
+        password_hash=_hash_password(body.password),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    token = _create_token(user.username)
+    return LoginResponse(token=token, user=UserMe(username=user.username))
+
+
+@router.post("/change-password")
+def change_password(
+    body: ChangePasswordRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """登录状态下修改当前用户密码。"""
+    if not _verify_password(body.old_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="原密码错误")
+    if body.old_password == body.new_password:
+        raise HTTPException(status_code=400, detail="新密码不能与原密码相同")
+    current_user.password_hash = _hash_password(body.new_password)
+    db.commit()
+    return {"message": "密码已更新，请使用新密码登录"}
