@@ -84,3 +84,4 @@
 | 2026-03-01 | 初版，基于用户访谈整理 |
 | 2026-03-02 | 阶段 1 登录功能完成：登录/登出、JWT、用户表、init_db、change_password；详见 docs/design-login.md |
 | 2026-03-03 | 阶段 1 仪表盘骨架与用户体系：多界面骨架（概览/监控/站点/数据库占位）、注册、修改密码（API+前端）；详见 docs/design-dashboard.md |
+| 2026-03 | 阶段 2 系统监控：需求与设计见 docs/design-monitor.md；CPU/内存/磁盘/网络接口与 /monitor 页展示 |

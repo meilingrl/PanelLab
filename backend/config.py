@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     init_admin_password: str = "admin"
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 天
 
+    # 远程 Linux 监控（可选）
+    remote_ssh_host: str = ""
+    remote_ssh_port: int = 22
+    remote_ssh_user: str = ""
+    remote_ssh_key_path: str = ""
+    remote_ssh_password: str = ""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

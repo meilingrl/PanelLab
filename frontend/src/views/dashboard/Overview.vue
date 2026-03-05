@@ -4,6 +4,11 @@ import { useRouter } from 'vue-router'
 
 const router = useRouter()
 const currentUser = ref({ username: '' })
+const statusItems = ref([
+  { label: 'CPU', value: '—', tip: '加载中…' },
+  { label: '内存', value: '—', tip: '加载中…' },
+  { label: '磁盘', value: '—', tip: '加载中…' },
+])
 
 onMounted(async () => {
   try {
@@ -15,18 +20,38 @@ onMounted(async () => {
       currentUser.value = data
     }
   } catch (_) {}
+  try {
+    const res = await fetch('/api/monitor/stats', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}` },
+    })
+    if (res.ok) {
+      const data = await res.json()
+      const rootDisk = data.disk && data.disk.length ? data.disk[0] : null
+      statusItems.value = [
+        { label: 'CPU', value: data.cpu_percent != null ? `${data.cpu_percent}%` : '—', tip: '' },
+        { label: '内存', value: data.memory != null ? `${data.memory.percent}%` : '—', tip: '' },
+        { label: '磁盘', value: rootDisk != null ? `${rootDisk.percent}%` : '—', tip: '' },
+      ]
+    } else {
+      statusItems.value = [
+        { label: 'CPU', value: '—', tip: '阶段 2 接入' },
+        { label: '内存', value: '—', tip: '阶段 2 接入' },
+        { label: '磁盘', value: '—', tip: '阶段 2 接入' },
+      ]
+    }
+  } catch (_) {
+    statusItems.value = [
+      { label: 'CPU', value: '—', tip: '阶段 2 接入' },
+      { label: '内存', value: '—', tip: '阶段 2 接入' },
+      { label: '磁盘', value: '—', tip: '阶段 2 接入' },
+    ]
+  }
 })
 
 const shortcuts = [
   { path: '/monitor', name: '系统监控', icon: '📈', desc: 'CPU、内存、磁盘、网络等' },
   { path: '/sites', name: '网站与反向代理', icon: '🌐', desc: '站点列表与 Nginx 配置' },
   { path: '/databases', name: '数据库管理', icon: '🗄️', desc: 'MySQL 库与用户管理' },
-]
-
-const statusItems = [
-  { label: 'CPU', value: '—', tip: '阶段 2 接入' },
-  { label: '内存', value: '—', tip: '阶段 2 接入' },
-  { label: '磁盘', value: '—', tip: '阶段 2 接入' },
 ]
 
 function go(path) {
