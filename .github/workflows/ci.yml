@@ -25,7 +25,7 @@ jobs:
 
       - name: Run backend tests
         env:
-          DATABASE_URL: sqlite:///:memory:
+          DATABASE_URL: "sqlite:///:memory:"
           SECRET_KEY: test-secret-key-for-ci
         run: |
           cd backend
