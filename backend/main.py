@@ -1,6 +1,7 @@
 """
 PanelLab 后端入口 — 阶段 0/1：Hello 面板 + 登录认证
 """
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -34,3 +35,9 @@ app.include_router(monitor.router)
 def api_health():
     """健康检查，可用于部署与监控。"""
     return {"status": "ok"}
+
+
+# 生产部署：若存在 static 目录（如 Docker 中拷贝的前端 dist），则托管 SPA
+if os.path.isdir(os.path.join(os.path.dirname(__file__), "static")):
+    from starlette.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True))

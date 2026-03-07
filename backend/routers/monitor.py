@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from collections import deque
 from typing import Any, Dict, List, Optional
 
 try:
@@ -24,6 +26,12 @@ from routers.auth import get_current_user
 from utils.cipher import decrypt_password, encrypt_password
 
 router = APIRouter(prefix="/api/monitor", tags=["monitor"])
+
+# 本机网络速率与历史（内存，进程重启清空）
+_net_last_ts: Optional[float] = None
+_net_last_sent: Optional[int] = None
+_net_last_recv: Optional[int] = None
+_network_history: deque = deque(maxlen=60)
 
 
 class RemoteConfigBody(BaseModel):
@@ -131,11 +139,29 @@ def _get_network() -> Optional[Dict[str, Any]]:
 
 
 def _get_stats_local() -> Dict[str, Any]:
+    global _net_last_ts, _net_last_sent, _net_last_recv
+    net = _get_network()
+    if net:
+        now = time.time()
+        if _net_last_ts is not None and _net_last_sent is not None and _net_last_recv is not None:
+            interval = now - _net_last_ts
+            if interval > 0:
+                rate_sent_kbps = (net["bytes_sent"] - _net_last_sent) / 1024.0 / interval
+                rate_recv_kbps = (net["bytes_recv"] - _net_last_recv) / 1024.0 / interval
+                net["rate_sent_kbps"] = round(rate_sent_kbps, 2)
+                net["rate_recv_kbps"] = round(rate_recv_kbps, 2)
+                _network_history.append({
+                    "ts": int(now),
+                    "rate_sent_kbps": round(rate_sent_kbps, 2),
+                    "rate_recv_kbps": round(rate_recv_kbps, 2),
+                })
+        net["network_history"] = list(_network_history)
+        _net_last_ts, _net_last_sent, _net_last_recv = now, net["bytes_sent"], net["bytes_recv"]
     return {
         "cpu_percent": _get_cpu(),
         "memory": _get_memory(),
         "disk": _get_disk(),
-        "network": _get_network(),
+        "network": net,
     }
 
 
@@ -222,6 +248,85 @@ def put_remote_config(
     return {"message": "已保存，可在上方选择「远程服务器」查看监控。"}
 
 
+def _ssh_install_psutil(host: str, port: int, username: str, password: str) -> Dict[str, Any]:
+    """通过 SSH 在目标机安装 psutil：优先 apt（Debian/Ubuntu），失败再试 pip。返回 { "ok": bool, "message"?: str, "detail"?: str }。"""
+    try:
+        import paramiko
+    except ImportError:
+        return {"ok": False, "detail": "后端未安装 paramiko，无法执行远程命令"}
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            hostname=host,
+            port=port,
+            username=username,
+            password=password,
+            timeout=15,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+
+        def run_cmd(command: str, timeout: int = 90) -> tuple[int, str, str]:
+            stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+            out = (stdout.read() or b"").decode("utf-8", errors="replace").strip()
+            err = (stderr.read() or b"").decode("utf-8", errors="replace").strip()
+            code = stdout.channel.recv_exit_status()
+            return code, out, err
+
+        # 1. 优先用 apt（Debian/Ubuntu），不依赖 pip，且不受 PEP 668 限制
+        apt_cmd = "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y python3-psutil 2>&1"
+        code, out, err = run_cmd(apt_cmd)
+        combined_apt = (out + "\n" + err).lower()
+        if code == 0:
+            client.close()
+            return {"ok": True, "message": "已通过 apt 在远程主机安装或确认 python3-psutil"}
+        if "is already the newest" in combined_apt or "already installed" in combined_apt or "0 upgraded" in combined_apt:
+            client.close()
+            return {"ok": True, "message": "远程主机已安装 python3-psutil，无需重复安装"}
+
+        # 2. apt 不可用（非 Debian/无权限/无包）时再试 pip
+        pip_cmd = "python3 -m pip install --user psutil 2>&1 || pip3 install --user psutil 2>&1"
+        code, out, err = run_cmd(pip_cmd, timeout=60)
+        client.close()
+        combined = (out + "\n" + err).lower()
+        if code == 0 or "Successfully installed" in out or "already satisfied" in combined:
+            return {"ok": True, "message": "已在远程主机成功安装或已存在 psutil"}
+        if "externally-managed-environment" in combined or "externally managed" in combined:
+            return {
+                "ok": True,
+                "message": "远程为受管 Python 环境，已收到反馈。若需使用监控，请在该主机执行: apt install python3-psutil",
+            }
+        return {"ok": False, "detail": (out or err) or f"退出码 {code}"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)}
+
+
+@router.post("/remote-install-psutil")
+def post_remote_install_psutil(
+    _user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """在已配置的远程主机上执行安装 psutil；未配置返回 503。"""
+    row = db.query(MonitorRemoteConfig).first()
+    if not row:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "detail": "请先保存远程服务器连接配置。"},
+        )
+    settings = get_settings()
+    password = decrypt_password(settings.secret_key, row.password_encrypted)
+    if not password:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "detail": "远程配置已损坏，请重新保存连接信息。"},
+        )
+    result = _ssh_install_psutil(row.host, row.port, row.username, password)
+    if result["ok"]:
+        return result
+    return JSONResponse(status_code=502, content=result)
+
+
 @router.get("/hosts")
 def get_hosts(_user: Annotated[User, Depends(get_current_user)]):
     """返回可选的监控目标列表（本机 + 远程）。下拉框始终显示两项，未配置时选远程会提示在页面下方配置。"""
@@ -231,6 +336,69 @@ def get_hosts(_user: Annotated[User, Depends(get_current_user)]):
             {"id": "remote", "label": "远程服务器"},
         ]
     }
+
+
+def _get_processes_list(limit: int = 50, sort_by: str = "cpu_percent", name_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+    """本机进程列表，用于进程管理展示。"""
+    result: List[Dict[str, Any]] = []
+    try:
+        procs = []
+        for p in psutil.process_iter(["pid", "name", "status", "username", "memory_info", "cpu_percent"]):
+            try:
+                pinfo = p.info
+                if pinfo.get("pid") is None:
+                    continue
+                name = (pinfo.get("name") or "").strip() or str(pinfo.get("pid"))
+                if name_filter and name_filter.strip():
+                    if name_filter.strip().lower() not in name.lower():
+                        continue
+                mem_mb = None
+                if pinfo.get("memory_info"):
+                    mem_mb = round(pinfo["memory_info"].rss / (1024 * 1024), 2)
+                cpu = pinfo.get("cpu_percent")
+                if cpu is None:
+                    try:
+                        cpu = p.cpu_percent(interval=None)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        cpu = 0
+                procs.append({
+                    "pid": pinfo["pid"],
+                    "name": name,
+                    "status": (pinfo.get("status") or "unknown"),
+                    "username": pinfo.get("username") or "—",
+                    "memory_mb": mem_mb,
+                    "cpu_percent": round(cpu, 1) if cpu is not None else None,
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied, KeyError):
+                continue
+        # 排序：cpu_percent | memory_mb | name，默认 cpu 降序
+        key_order = "cpu_percent"
+        reverse = True
+        if sort_by == "memory_mb":
+            key_order = "memory_mb"
+            reverse = True
+        elif sort_by == "name":
+            key_order = "name"
+            reverse = False
+        elif sort_by == "pid":
+            key_order = "pid"
+            reverse = False
+        procs.sort(key=lambda x: (x.get(key_order) is None, x.get(key_order) if key_order != "name" else (x.get(key_order) or "").lower()), reverse=reverse)
+        result = procs[: max(1, min(limit, 500))]
+    except Exception:
+        pass
+    return result
+
+
+@router.get("/processes")
+def get_processes(
+    _user: Annotated[User, Depends(get_current_user)],
+    limit: int = Query(50, ge=1, le=500, description="返回条数"),
+    sort_by: str = Query("cpu_percent", description="排序: cpu_percent | memory_mb | name | pid"),
+    name_filter: Optional[str] = Query(None, description="按进程名模糊过滤"),
+):
+    """返回本机进程列表（只读），需登录。仅支持本机，远程暂不提供。"""
+    return {"processes": _get_processes_list(limit=limit, sort_by=sort_by, name_filter=name_filter)}
 
 
 @router.get("/stats")

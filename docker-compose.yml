@@ -1,0 +1,40 @@
+# PanelLab 本地/演示用：MySQL + 应用
+# 首次运行：docker compose up -d mysql，等待就绪后执行 init_db，再 docker compose up -d app
+# 详见 docs/deploy.md
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: panel_lab
+      MYSQL_USER: panel_lab
+      MYSQL_PASSWORD: panel_lab
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: panel_lab
+      MYSQL_PASSWORD: panel_lab
+      MYSQL_DATABASE: panel_lab
+      SECRET_KEY: change-me-in-production
+      INIT_ADMIN_PASSWORD: admin
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data: {}

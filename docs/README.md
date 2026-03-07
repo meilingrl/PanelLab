@@ -12,7 +12,7 @@
 | **Plan / 设计** | `design-*.md`、`plan-*.md` | 各阶段或各功能模块的**需求与设计**，格式统一（见下） |
 | **模板** | [_template-plan.md](_template-plan.md) | 新建局部规划时复制此模板，按节填写 |
 | **环境与测试** | [testing-steps.md](testing-steps.md)、[check-mysql.md](check-mysql.md)、[linux-testing-wsl-vm.md](linux-testing-wsl-vm.md) | 环境准备、MySQL 校验、WSL/虚拟机测试 |
-| **协作与部署** | [setup-github.md](setup-github.md) | GitHub 仓库关联与推送 |
+| **协作与部署** | [setup-github.md](setup-github.md)、[deploy.md](deploy.md) | GitHub 仓库关联与推送；Docker/生产部署步骤 |
 
 ---
 
@@ -48,5 +48,8 @@
 | [design-dashboard.md](design-dashboard.md) | 阶段 1：仪表盘布局与多界面骨架 |
 | [design-monitor.md](design-monitor.md) | 阶段 2：本机系统监控（CPU/内存/磁盘/网络） |
 | [design-monitor-remote.md](design-monitor-remote.md) | 阶段 2 扩展：远程 Linux 监控（SSH + 采集脚本） |
+| [design-sites-proxy.md](design-sites-proxy.md) | 阶段 3：网站与反向代理（站点 CRUD、Nginx 配置与生效） |
+| [plan-project-progress.md](plan-project-progress.md) | 项目整体：进度评估、里程碑重排、周期工作安排 |
+| [core-technology-overview.md](core-technology-overview.md) | 项目整体：各主要功能的核心技术讲解 |
 
 阶段 3（网站与反向代理）、阶段 4（数据库管理）等的新规划，建议直接使用 `_template-plan.md` 生成新的 `plan-*.md` 或 `design-*.md`。

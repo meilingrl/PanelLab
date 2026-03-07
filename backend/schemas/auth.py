@@ -1,5 +1,5 @@
 """认证相关请求/响应模型。"""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LoginRequest(BaseModel):
@@ -23,10 +23,9 @@ class LoginResponse(BaseModel):
 
 
 class UserMe(BaseModel):
-    username: str
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        from_attributes = True
+    username: str
 
 
 LoginResponse.model_rebuild()

@@ -1,10 +1,16 @@
 """应用配置，从环境变量加载。"""
 from typing import Optional
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
     mysql_host: str = "127.0.0.1"
     mysql_port: int = 3306
     mysql_user: str = "panel_lab"
@@ -24,11 +30,6 @@ class Settings(BaseSettings):
     remote_ssh_user: str = ""
     remote_ssh_key_path: str = ""
     remote_ssh_password: str = ""
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
 
 
 def get_settings() -> Settings:

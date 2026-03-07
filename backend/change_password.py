@@ -3,9 +3,7 @@ import getpass
 import sys
 from database import SessionLocal
 from models.user import User
-from passlib.context import CryptContext
-
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt
 
 
 def main():
@@ -27,7 +25,7 @@ def main():
         if not user:
             print(f"用户 {username} 不存在。")
             sys.exit(1)
-        user.password_hash = pwd_ctx.hash(new_password)
+        user.password_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
         db.commit()
         print(f"已更新用户 {username} 的密码，请使用新密码登录。")
     finally:

@@ -23,7 +23,8 @@
 | **访问与权限** | 单用户即可满足当前需求；公网访问；若仅内网/本机则多用户意义不大 |
 | **部署** | 固定机器部署；安装方式后续补充（如一键脚本、Docker、手动步骤）；打包与分发方式待学习 |
 
-详细需求与设计见 [docs/requirements.md](docs/requirements.md)。
+- 总需求与阶段规划：[docs/requirements.md](docs/requirements.md)
+- 文档索引与 Plan 说明（局部规划格式）：[docs/README.md](docs/README.md)
 
 ---
 
@@ -69,8 +70,8 @@
 | 阶段 | 内容 | 产出 |
 |------|------|------|
 | **0** | 技术选型与 Hello 面板 | 前后端打通、本地可访问空白面板 |
-| **1** | 用户体系与仪表盘 | 登录/登出、仪表盘骨架与基础数据展示（已完成，见 [docs/design-login.md](docs/design-login.md)） |
-| **2** | 系统监控与进程管理 | CPU/内存/磁盘/网络监控、进程列表与操作 |
+| **1** | 用户体系与仪表盘 | 登录/登出、仪表盘骨架（已完成，见 [design-login](docs/design-login.md)、[design-dashboard](docs/design-dashboard.md)） |
+| **2** | 系统监控与进程管理 | 本机 + 远程 Linux 监控（已完成，见 [design-monitor](docs/design-monitor.md)、[design-monitor-remote](docs/design-monitor-remote.md)）；进程列表待做 |
 | **3** | 网站与反向代理 | 站点 CRUD、Nginx 反向代理配置与生效 |
 | **4** | 数据库与计划任务 | MySQL 库/用户管理、计划任务（cron）管理 |
 | **5** | 安全与部署、多机扩展（可选） | 权限与审计、部署文档、可选多服务器架构 |
@@ -106,9 +107,9 @@
 
 ```
 PanelLab/
-├── backend/     # 后端 API 服务（FastAPI）
-├── frontend/    # 前端 Web 应用（Vue 3）
-├── docs/        # 项目文档
+├── backend/     # 后端 API（FastAPI + MySQL）
+├── frontend/    # 前端（Vue 3 + Vite）
+├── docs/        # 需求、设计（Plan）、环境与测试文档，见 docs/README.md
 └── README.md
 ```
 

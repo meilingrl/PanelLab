@@ -1,5 +1,8 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { Chart, registerables } from 'chart.js'
+
+Chart.register(...registerables)
 
 const hosts = ref([{ id: 'local', label: '本机' }])
 const currentTarget = ref('local')
@@ -18,6 +21,26 @@ const remotePassword = ref('')
 const saveRemoteLoading = ref(false)
 const saveRemoteError = ref('')
 const saveRemoteSuccess = ref('')
+
+const processes = ref([])
+const processLoading = ref(false)
+const processError = ref('')
+const processSortBy = ref('cpu_percent')
+const processLimit = ref(50)
+const processNameFilter = ref('')
+
+const trafficChartRef = ref(null)
+let trafficChart = null
+const installPsutilLoading = ref(false)
+const installPsutilMessage = ref('')
+const installPsutilError = ref('')
+
+const GAUGE_R = 40
+const GAUGE_C = 2 * Math.PI * GAUGE_R
+function gaugeOffset(percent) {
+  if (percent == null || percent < 0) return GAUGE_C
+  return GAUGE_C * (1 - Math.min(100, percent) / 100)
+}
 
 function formatMB(n) {
   if (n == null) return '—'
@@ -78,6 +101,7 @@ onMounted(async () => {
   await fetchRemoteConfig()
   await fetchHosts()
   fetchStats()
+  fetchProcesses()
   pollTimer = setInterval(fetchStats, POLL_INTERVAL)
 })
 
@@ -86,7 +110,46 @@ watch(currentTarget, () => {
   error.value = ''
   stats.value = null
   fetchStats()
+  if (currentTarget.value === 'local') fetchProcesses()
 })
+
+watch(
+  () => stats.value?.network?.network_history,
+  () => {
+    if (currentTarget.value === 'local' && stats.value?.network?.network_history?.length) nextTick(updateTrafficChart)
+  },
+  { deep: true }
+)
+
+async function fetchProcesses() {
+  if (currentTarget.value !== 'local') return
+  processLoading.value = true
+  processError.value = ''
+  try {
+    const params = new URLSearchParams({
+      limit: String(processLimit.value),
+      sort_by: processSortBy.value,
+    })
+    if (processNameFilter.value.trim()) params.set('name_filter', processNameFilter.value.trim())
+    const res = await fetch(`/api/monitor/processes?${params}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}` },
+    })
+    if (!res.ok) {
+      if (res.status === 401) return
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || '获取进程列表失败')
+    }
+    const data = await res.json()
+    processes.value = data.processes || []
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      processError.value = e.message || '进程列表暂不可用'
+      processes.value = []
+    }
+  } finally {
+    processLoading.value = false
+  }
+}
 
 async function fetchRemoteConfig() {
   try {
@@ -149,8 +212,84 @@ function openRemoteForm() {
   saveRemoteSuccess.value = ''
 }
 
+async function installPsutilOnRemote() {
+  installPsutilError.value = ''
+  installPsutilMessage.value = ''
+  installPsutilLoading.value = true
+  try {
+    const res = await fetch('/api/monitor/remote-install-psutil', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}` },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (res.status === 501) {
+      installPsutilMessage.value = data.detail || '功能开发中，请在远程主机手动执行: pip3 install --user psutil'
+      return
+    }
+    if (!res.ok) {
+      installPsutilError.value = data.detail || data.message || '安装失败'
+      return
+    }
+    if (data.ok) {
+      installPsutilMessage.value = data.message || '已在远程主机安装 psutil'
+    } else {
+      installPsutilError.value = data.detail || '安装失败'
+    }
+  } catch (e) {
+    installPsutilError.value = e.message || '网络错误'
+  } finally {
+    installPsutilLoading.value = false
+  }
+}
+
+function updateTrafficChart() {
+  const net = stats.value?.network
+  const history = net?.network_history || []
+  if (!trafficChartRef.value || !Array.isArray(history) || history.length === 0) return
+  const labels = history.map((p) => {
+    const d = new Date(p.ts * 1000)
+    return d.getMinutes() + ':' + String(d.getSeconds()).padStart(2, '0')
+  })
+  const sentData = history.map((p) => p.rate_sent_kbps ?? 0)
+  const recvData = history.map((p) => p.rate_recv_kbps ?? 0)
+  if (!trafficChart) {
+    const ctx = trafficChartRef.value.getContext('2d')
+    const border = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#ddd'
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4a9'
+    const text = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim() || '#666'
+    trafficChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: '接收 KB/s', data: recvData, borderColor: accent, backgroundColor: accent + '20', fill: true, tension: 0.4 },
+          { label: '发送 KB/s', data: sentData, borderColor: text, backgroundColor: text + '20', fill: true, tension: 0.4 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' } },
+        scales: {
+          x: { ticks: { color: text, maxTicksLimit: 10 } },
+          y: { beginAtZero: true, ticks: { color: text } },
+        },
+      },
+    })
+  } else {
+    trafficChart.data.labels = labels
+    trafficChart.data.datasets[0].data = recvData
+    trafficChart.data.datasets[1].data = sentData
+    trafficChart.update('none')
+  }
+}
+
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  if (trafficChart) {
+    trafficChart.destroy()
+    trafficChart = null
+  }
 })
 </script>
 
@@ -170,13 +309,13 @@ onUnmounted(() => {
     <template v-else-if="stats">
       <section class="section">
         <h2 class="section-title">CPU</h2>
-        <div class="card">
-          <div v-if="stats.cpu_percent != null" class="metric-row">
-            <span class="label">使用率</span>
-            <span class="value">{{ stats.cpu_percent }}%</span>
-            <div class="bar-wrap">
-              <div class="bar" :style="{ width: Math.min(100, stats.cpu_percent) + '%' }"></div>
-            </div>
+        <div class="card card-gauge">
+          <div v-if="stats.cpu_percent != null" class="gauge-wrap">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-bg" cx="50" cy="50" :r="GAUGE_R" fill="none" stroke-width="10" />
+              <circle class="gauge-fill" cx="50" cy="50" :r="GAUGE_R" fill="none" stroke-width="10" :stroke-dasharray="GAUGE_C" :stroke-dashoffset="gaugeOffset(stats.cpu_percent)" transform="rotate(-90 50 50)" />
+            </svg>
+            <span class="gauge-value">{{ stats.cpu_percent }}%</span>
           </div>
           <p v-else class="muted">暂不可用</p>
         </div>
@@ -184,19 +323,16 @@ onUnmounted(() => {
 
       <section class="section">
         <h2 class="section-title">内存</h2>
-        <div class="card">
+        <div class="card card-gauge">
           <template v-if="stats.memory">
-            <div class="metric-row">
-              <span class="label">总 / 已用 / 可用</span>
-              <span class="value">{{ formatMB(stats.memory.total_mb) }} / {{ formatMB(stats.memory.used_mb) }} / {{ formatMB(stats.memory.available_mb) }}</span>
+            <div class="gauge-wrap">
+              <svg class="gauge-svg" viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" :r="GAUGE_R" fill="none" stroke-width="10" />
+                <circle class="gauge-fill" cx="50" cy="50" :r="GAUGE_R" fill="none" stroke-width="10" :stroke-dasharray="GAUGE_C" :stroke-dashoffset="gaugeOffset(stats.memory.percent)" transform="rotate(-90 50 50)" />
+              </svg>
+              <span class="gauge-value">{{ stats.memory.percent }}%</span>
             </div>
-            <div class="metric-row">
-              <span class="label">使用率</span>
-              <span class="value">{{ stats.memory.percent }}%</span>
-              <div class="bar-wrap">
-                <div class="bar" :style="{ width: Math.min(100, stats.memory.percent) + '%' }"></div>
-              </div>
-            </div>
+            <p class="gauge-detail">已用 {{ formatMB(stats.memory.used_mb) }} / 共 {{ formatMB(stats.memory.total_mb) }}</p>
           </template>
           <p v-else class="muted">暂不可用</p>
         </div>
@@ -205,19 +341,16 @@ onUnmounted(() => {
       <section class="section">
         <h2 class="section-title">磁盘</h2>
         <div v-if="stats.disk && stats.disk.length" class="card disk-list">
-          <div v-for="d in stats.disk" :key="d.mountpoint" class="disk-item">
+          <div v-for="d in stats.disk" :key="d.mountpoint" class="disk-item disk-item-gauge">
             <div class="disk-mount">{{ d.mountpoint }}</div>
-            <div class="metric-row">
-              <span class="label">总 / 已用 / 可用</span>
-              <span class="value">{{ formatGB(d.total_gb) }} / {{ formatGB(d.used_gb) }} / {{ formatGB(d.free_gb) }}</span>
+            <div class="gauge-wrap gauge-wrap-sm">
+              <svg class="gauge-svg gauge-svg-sm" viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="36" fill="none" stroke-width="8" />
+                <circle class="gauge-fill" cx="50" cy="50" r="36" fill="none" stroke-width="8" stroke-dasharray="226" :stroke-dashoffset="226 * (1 - Math.min(100, d.percent) / 100)" transform="rotate(-90 50 50)" />
+              </svg>
+              <span class="gauge-value gauge-value-sm">{{ d.percent }}%</span>
             </div>
-            <div class="metric-row">
-              <span class="label">使用率</span>
-              <span class="value">{{ d.percent }}%</span>
-              <div class="bar-wrap">
-                <div class="bar" :style="{ width: Math.min(100, d.percent) + '%' }"></div>
-              </div>
-            </div>
+            <p class="gauge-detail">已用 {{ formatGB(d.used_gb) }} / 共 {{ formatGB(d.total_gb) }}</p>
           </div>
         </div>
         <div v-else class="card">
@@ -230,15 +363,77 @@ onUnmounted(() => {
         <div class="card">
           <template v-if="stats.network">
             <div class="metric-row">
-              <span class="label">累计接收</span>
-              <span class="value">{{ formatBytes(stats.network.bytes_recv) }}</span>
+              <span class="label">累计接收 / 发送</span>
+              <span class="value">{{ formatBytes(stats.network.bytes_recv) }} / {{ formatBytes(stats.network.bytes_sent) }}</span>
             </div>
-            <div class="metric-row">
-              <span class="label">累计发送</span>
-              <span class="value">{{ formatBytes(stats.network.bytes_sent) }}</span>
+            <div v-if="stats.network.rate_recv_kbps != null || stats.network.rate_sent_kbps != null" class="metric-row">
+              <span class="label">当前速率（KB/s）</span>
+              <span class="value">接收 {{ stats.network.rate_recv_kbps ?? '—' }} / 发送 {{ stats.network.rate_sent_kbps ?? '—' }}</span>
+            </div>
+            <div v-if="currentTarget === 'local' && stats.network.network_history?.length" class="traffic-chart-wrap">
+              <canvas ref="trafficChartRef" height="200"></canvas>
             </div>
           </template>
           <p v-else class="muted">暂不可用</p>
+        </div>
+      </section>
+
+      <section v-if="currentTarget === 'local'" class="section">
+        <h2 class="section-title">进程列表</h2>
+        <div class="card">
+          <div class="process-toolbar">
+            <label class="process-label">排序</label>
+            <select v-model="processSortBy" class="process-select" @change="fetchProcesses">
+              <option value="cpu_percent">CPU 使用率</option>
+              <option value="memory_mb">内存占用</option>
+              <option value="name">进程名</option>
+              <option value="pid">PID</option>
+            </select>
+            <label class="process-label">条数</label>
+            <select v-model="processLimit" class="process-select" @change="fetchProcesses">
+              <option :value="20">20</option>
+              <option :value="50">50</option>
+              <option :value="100">100</option>
+              <option :value="200">200</option>
+            </select>
+            <input
+              v-model="processNameFilter"
+              type="text"
+              class="process-filter"
+              placeholder="按名称过滤"
+              @keyup.enter="fetchProcesses"
+            />
+            <button type="button" class="btn-secondary" :disabled="processLoading" @click="fetchProcesses">
+              {{ processLoading ? '加载中…' : '刷新' }}
+            </button>
+          </div>
+          <p v-if="processError" class="form-error">{{ processError }}</p>
+          <div v-else-if="processLoading && !processes.length" class="state state-loading">加载中…</div>
+          <div v-else class="table-wrap">
+            <table class="process-table">
+              <thead>
+                <tr>
+                  <th>PID</th>
+                  <th>名称</th>
+                  <th>状态</th>
+                  <th>用户</th>
+                  <th>内存 (MB)</th>
+                  <th>CPU %</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in processes" :key="p.pid">
+                  <td>{{ p.pid }}</td>
+                  <td class="process-name">{{ p.name }}</td>
+                  <td>{{ p.status }}</td>
+                  <td>{{ p.username }}</td>
+                  <td>{{ p.memory_mb != null ? p.memory_mb : '—' }}</td>
+                  <td>{{ p.cpu_percent != null ? p.cpu_percent : '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="!processLoading && processes.length === 0" class="muted">暂无进程数据</p>
+          </div>
         </div>
       </section>
     </template>
@@ -250,7 +445,14 @@ onUnmounted(() => {
           <p class="remote-summary">
             已配置：<strong>{{ remoteConfig.host }}:{{ remoteConfig.port }}</strong>（用户 {{ remoteConfig.username }}）
           </p>
-          <button type="button" class="btn-secondary" @click="openRemoteForm">修改配置</button>
+          <div class="remote-actions">
+            <button type="button" class="btn-secondary" @click="openRemoteForm">修改配置</button>
+            <button type="button" class="btn-secondary" :disabled="installPsutilLoading" @click="installPsutilOnRemote">
+              {{ installPsutilLoading ? '执行中…' : '在远程主机安装 psutil' }}
+            </button>
+          </div>
+          <p v-if="installPsutilMessage" class="form-success">{{ installPsutilMessage }}</p>
+          <p v-if="installPsutilError" class="form-error">{{ installPsutilError }}</p>
         </template>
         <template v-else>
           <p class="remote-hint">填写 Linux 服务器的 SSH 信息，保存后可在上方选择「远程服务器」查看其监控。远程需已安装 Python3 与 psutil。</p>
@@ -363,6 +565,85 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1.25rem;
+}
+
+.card-gauge {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.gauge-wrap {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+}
+
+.gauge-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(0deg);
+}
+
+.gauge-bg {
+  stroke: var(--bg-tertiary);
+}
+
+.gauge-fill {
+  stroke: var(--accent);
+  transition: stroke-dashoffset 0.3s ease;
+}
+
+.gauge-value {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.gauge-detail {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.gauge-wrap-sm {
+  width: 80px;
+  height: 80px;
+}
+
+.gauge-svg-sm {
+  width: 100%;
+  height: 100%;
+}
+
+.gauge-value-sm {
+  font-size: 0.95rem;
+}
+
+.disk-item-gauge {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.traffic-chart-wrap {
+  margin-top: 1rem;
+  height: 200px;
+  position: relative;
+}
+
+.remote-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 
 .metric-row {
@@ -518,5 +799,78 @@ onUnmounted(() => {
 .btn-primary:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.process-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.process-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.process-select {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.process-filter {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.9rem;
+  width: 140px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.process-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.process-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.process-table th,
+.process-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.process-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.process-table tbody tr:hover {
+  background: var(--bg-tertiary);
+}
+
+.process-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
