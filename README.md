@@ -154,7 +154,7 @@ npm install
   ```bash
   uvicorn main:app --reload
   ```
-  服务地址默认：http://localhost:8000 ；接口测试：http://localhost:8000/api/hello
+  服务地址默认：http://localhost:8000 ；接口测试：http://localhost:8000/api/health
 - **首次使用登录功能**：建库并配置好 `.env` 后，在 `backend` 目录执行一次初始化（创建用户表并写入默认管理员）：
   ```bash
   python -m init_db

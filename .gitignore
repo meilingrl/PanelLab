@@ -1,5 +1,7 @@
 # 通用
 .DS_Store
+# 代理节点配置（含服务器与密钥，勿提交）
+proxy-setup/clash-verge-完整配置.yaml
 Thumbs.db
 *.log
 .env

@@ -30,16 +30,6 @@ app.include_router(auth.router)
 app.include_router(monitor.router)
 
 
-@app.get("/api/hello")
-def api_hello():
-    """供前端调用的测试接口，用于验证前后端环境与联通。"""
-    return {
-        "status": "ok",
-        "message": "PanelLab",
-        "service": "backend",
-    }
-
-
 @app.get("/api/health")
 def api_health():
     """健康检查，可用于部署与监控。"""
