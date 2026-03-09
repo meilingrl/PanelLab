@@ -2,7 +2,7 @@
 import sys
 import bcrypt
 from database import engine, SessionLocal, Base
-from models.user import User
+from models import MonitorRemoteConfig, Server, SiteConfig, User  # 注册所有模型以便 create_all 建齐表
 from config import get_settings
 
 

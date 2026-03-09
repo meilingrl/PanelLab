@@ -61,7 +61,7 @@ docker exec -it <容器ID> python -m init_db
 ## 二、传统部署（无 Docker）
 
 1. **准备 MySQL**  
-   创建数据库与用户，参见 [check-mysql.md](check-mysql.md)。
+   创建数据库与用户，参见 [environment/check-mysql.md](../environment/check-mysql.md)。
 
 2. **后端**  
    - 在 `backend` 目录配置 `.env`（MYSQL_*、SECRET_KEY、INIT_ADMIN_PASSWORD）。  

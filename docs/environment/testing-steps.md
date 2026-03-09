@@ -9,7 +9,7 @@
 1. **MySQL** 已安装并运行，且已创建数据库与用户：
    - 数据库：`panel_lab`
    - 能用于连接的账号（如 `panel_lab` 或 `root`）及密码  
-   验证方式见 [docs/check-mysql.md](check-mysql.md)。
+   验证方式见 [check-mysql.md](check-mysql.md)。
 
 2. **后端 `.env`** 已配置：  
    在 `backend` 目录存在 `.env`，且已填写 `MYSQL_HOST`、`MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DATABASE`、`SECRET_KEY`、`INIT_ADMIN_PASSWORD`（可选，默认 `admin`）。
@@ -121,7 +121,7 @@ python scripts/smoke.py
    前端可在 Windows 继续用 `npm run dev`，浏览器访问同一前端地址即可（后端在 WSL 时仍为 localhost:8000）。
 3. 重复 **四** 的登录、登出、错误密码、主题切换，确认行为一致。
 
-详细 WSL 配置见 [docs/linux-testing-wsl-vm.md](linux-testing-wsl-vm.md)。
+详细 WSL 配置见 [linux-testing-wsl-vm.md](linux-testing-wsl-vm.md)。
 
 ---
 

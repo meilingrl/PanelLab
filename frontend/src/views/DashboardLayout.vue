@@ -25,6 +25,7 @@ onMounted(async () => {
 const navItems = [
   { path: '/', name: '概览', icon: '📊' },
   { path: '/monitor', name: '系统监控', icon: '📈' },
+  { path: '/terminal', name: '终端控制', icon: '💻' },
   { path: '/sites', name: '网站与反向代理', icon: '🌐' },
   { path: '/databases', name: '数据库管理', icon: '🗄️' },
 ]

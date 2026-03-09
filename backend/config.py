@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     remote_ssh_key_path: str = ""
     remote_ssh_password: str = ""
 
+    # 网站与反向代理（阶段 3）
+    nginx_conf_dir: str = "/etc/nginx/conf.d"
+    nginx_test_cmd: str = "nginx -t"
+    nginx_reload_cmd: str = "nginx -s reload"
+    nginx_cmd_timeout_seconds: int = 15
+    nginx_skip_apply: bool = False
+
 
 def get_settings() -> Settings:
     return Settings()

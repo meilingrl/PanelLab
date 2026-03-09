@@ -5,6 +5,7 @@ from datetime import datetime
 # 文件型 SQLite 保证所有连接（conftest 与 app 请求）看到同一库
 _test_db = os.path.join(os.path.dirname(__file__), "test.db")
 os.environ["DATABASE_URL"] = f"sqlite:///{_test_db}"
+os.environ["NGINX_SKIP_APPLY"] = "1"
 
 import pytest
 import bcrypt

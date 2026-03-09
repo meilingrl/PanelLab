@@ -1,6 +1,6 @@
 # 登录功能：需求与设计（阶段 1）
 
-本文档为阶段 1 登录部分的 Plan，格式与 [docs/README.md](README.md) 中「Plan 格式说明」一致。
+本文档为阶段 1 登录部分的 Plan，格式与 [docs/README.md](../README.md) 中「Plan 格式说明」一致。
 
 ---
 
@@ -74,7 +74,7 @@
 - [x] 后端接口：login / logout / me，JWT
 - [x] 用户表与 init_db、change_password
 - [x] Windows 本地测试通过（登录 / 登出 / 错误密码 / 主题）
-- [ ] WSL 或虚拟机 Linux 环境测试（可选，按 [testing-steps.md](testing-steps.md) 第六节）
+- [ ] WSL 或虚拟机 Linux 环境测试（可选，按 [environment/testing-steps.md](../environment/testing-steps.md) 第六节）
 - [ ] Git 提交（建议提交信息：feat: 阶段1 登录功能 - UI/接口/用户表/init_db/change_password）
 
 阶段 1 登录部分已完成，可进入阶段 2（系统监控与进程管理）或先做 WSL/Linux 验证与提交。

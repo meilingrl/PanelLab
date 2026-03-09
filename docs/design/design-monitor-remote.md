@@ -1,6 +1,6 @@
 # 远程 Linux 监控：需求与设计（Plan）
 
-本文档为「远程 Linux 监控」的 Plan，与 [design-monitor.md](design-monitor.md) 本机监控共用同一套数据结构和前端展示；格式与 [docs/README.md](README.md) 中「Plan 格式说明」一致。
+本文档为「远程 Linux 监控」的 Plan，与 [design-monitor.md](design-monitor.md) 本机监控共用同一套数据结构和前端展示；格式与 [docs/README.md](../README.md) 中「Plan 格式说明」一致。
 
 ---
 

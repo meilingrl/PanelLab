@@ -1,6 +1,6 @@
 # 仪表盘：需求与设计（阶段 1）
 
-本文档为阶段 1 仪表盘骨架的 Plan，格式与 [docs/README.md](README.md) 中「Plan 格式说明」一致。
+本文档为阶段 1 仪表盘骨架的 Plan，格式与 [docs/README.md](../README.md) 中「Plan 格式说明」一致。
 
 ---
 
@@ -69,7 +69,7 @@
 
 ## 7. 与后续阶段衔接
 
-- 阶段 2：在 `/monitor` 页接入系统监控 API 与图表；详见 docs/design-monitor.md。
+- 阶段 2：在 `/monitor` 页接入系统监控 API 与图表；详见 [design-monitor.md](design-monitor.md)。
 - 阶段 3：在 `/sites` 页接入站点列表、添加/编辑、Nginx 配置。
 - 阶段 4：在 `/databases` 页接入数据库列表与管理。
 - 用户相关：修改密码、注册入口放在布局内（用户菜单或独立设置页），与 `design-login.md` 及用户体系扩展一致。

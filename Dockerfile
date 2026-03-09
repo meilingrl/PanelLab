@@ -1,6 +1,6 @@
 # PanelLab 生产镜像：前端构建 + 后端运行，单镜像托管
 # 构建：docker build -t panellab .
-# 运行需挂载 .env 或传入 MYSQL_*、SECRET_KEY 等，并先执行 init_db（见 docs/deploy.md）
+# 运行需挂载 .env 或传入 MYSQL_*、SECRET_KEY 等，并先执行 init_db（见 docs/deploy/deploy.md）
 
 # 阶段 1：构建前端
 FROM node:20-alpine AS frontend

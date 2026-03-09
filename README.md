@@ -23,7 +23,7 @@
 | **访问与权限** | 单用户即可满足当前需求；公网访问；若仅内网/本机则多用户意义不大 |
 | **部署** | 固定机器部署；安装方式后续补充（如一键脚本、Docker、手动步骤）；打包与分发方式待学习 |
 
-- 总需求与阶段规划：[docs/requirements.md](docs/requirements.md)
+- 总需求与阶段规划：[docs/project/requirements.md](docs/project/requirements.md)
 - 文档索引与 Plan 说明（局部规划格式）：[docs/README.md](docs/README.md)
 
 ---
@@ -36,7 +36,7 @@
   - 后端/前端代码在 Windows 用 VS Code/Cursor 写，在 WSL 或远程 Linux 上运行与调试。
   - 涉及系统调用的部分（如执行 shell、读 `/etc`、进程列表）尽量抽象成接口，在开发机用 Mock 或 WSL 测，定期在真实 Linux 上做一次集成测试。
 - **注意**：路径、换行符、权限等要在 Linux 上验证，避免只在本机 Windows 通过就认为没问题。
-- **操作指南**：如何用 WSL2 与虚拟机做 Linux 端运行与测试，见 [docs/linux-testing-wsl-vm.md](docs/linux-testing-wsl-vm.md)。
+- **操作指南**：如何用 WSL2 与虚拟机做 Linux 端运行与测试，见 [docs/environment/linux-testing-wsl-vm.md](docs/environment/linux-testing-wsl-vm.md)。
 
 ---
 
@@ -70,8 +70,8 @@
 | 阶段 | 内容 | 产出 |
 |------|------|------|
 | **0** | 技术选型与 Hello 面板 | 前后端打通、本地可访问空白面板 |
-| **1** | 用户体系与仪表盘 | 登录/登出、仪表盘骨架（已完成，见 [design-login](docs/design-login.md)、[design-dashboard](docs/design-dashboard.md)） |
-| **2** | 系统监控与进程管理 | 本机 + 远程 Linux 监控（已完成，见 [design-monitor](docs/design-monitor.md)、[design-monitor-remote](docs/design-monitor-remote.md)）；进程列表待做 |
+| **1** | 用户体系与仪表盘 | 登录/登出、仪表盘骨架（已完成，见 [design-login](docs/design/design-login.md)、[design-dashboard](docs/design/design-dashboard.md)） |
+| **2** | 系统监控与进程管理 | 本机 + 远程 Linux 监控（已完成，见 [design-monitor](docs/design/design-monitor.md)、[design-monitor-remote](docs/design/design-monitor-remote.md)）；进程列表待做 |
 | **3** | 网站与反向代理 | 站点 CRUD、Nginx 反向代理配置与生效 |
 | **4** | 数据库与计划任务 | MySQL 库/用户管理、计划任务（cron）管理 |
 | **5** | 安全与部署、多机扩展（可选） | 权限与审计、部署文档、可选多服务器架构 |
@@ -163,4 +163,4 @@ npm install
   默认管理员用户名：`admin`，密码为 `.env` 中的 `INIT_ADMIN_PASSWORD`（默认 `admin`）。之后可在登录页使用该账号登录。若需修改密码，在 `backend` 目录执行：`python change_password.py admin 你的新密码`。
 - **前端**：在 `frontend` 目录运行 `npm run dev`，浏览器打开终端提示的地址（如 http://localhost:5173 ）。登录页输入上述账号密码即可进入仪表盘。
 
-完整测试步骤（含前置条件、后端/前端启动、浏览器验证、可选 WSL 测试）见 [docs/testing-steps.md](docs/testing-steps.md)。
+完整测试步骤（含前置条件、后端/前端启动、浏览器验证、可选 WSL 测试）见 [docs/environment/testing-steps.md](docs/environment/testing-steps.md)。

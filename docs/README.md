@@ -4,15 +4,68 @@
 
 ---
 
-## 文档结构
+## 目录结构（向下细分）
 
-| 类型 | 文件 | 说明 |
+```
+docs/
+├── README.md              # 本索引
+├── design/                # 各阶段/模块需求与设计（Plan）
+│   ├── _template-plan.md  # 新建 Plan 时复制的模板
+│   ├── design-login.md
+│   ├── design-dashboard.md
+│   ├── design-monitor.md
+│   ├── design-monitor-remote.md
+│   ├── design-monitor-ui-enhancements.md
+│   ├── design-sites-proxy.md
+│   ├── design-database-tasks.md
+│   └── design-terminal.md      # 网页端 SSH 终端
+├── user/                  # 用户向文档
+│   └── user-manual.md     # 用户使用说明书
+├── project/               # 项目总览与需求
+│   ├── requirements.md    # 产品目标、阶段与优先级
+│   ├── plan-project-progress.md  # 进度、里程碑、周期安排
+│   └── core-technology-overview.md  # 核心技术讲解
+├── environment/           # 环境、测试、依赖
+│   ├── testing-steps.md   # 完整测试与验收步骤
+│   ├── check-mysql.md     # MySQL 环境校验
+│   └── linux-testing-wsl-vm.md  # WSL2/虚拟机 Linux 测试
+├── deploy/                # 部署与协作
+│   ├── deploy.md          # Docker/传统部署说明
+│   └── setup-github.md    # GitHub 仓库关联与推送
+└── guides/                # 教程与工具
+    └── dbeaver-tutorial.md  # DBeaver 使用教程
+```
+
+---
+
+## 文档速查
+
+| 类型 | 路径 | 说明 |
 |------|------|------|
-| **总需求** | [requirements.md](requirements.md) | 产品目标、用户场景、功能范围、阶段与优先级 |
-| **Plan / 设计** | `design-*.md`、`plan-*.md` | 各阶段或各功能模块的**需求与设计**，格式统一（见下） |
-| **模板** | [_template-plan.md](_template-plan.md) | 新建局部规划时复制此模板，按节填写 |
-| **环境与测试** | [testing-steps.md](testing-steps.md)、[check-mysql.md](check-mysql.md)、[linux-testing-wsl-vm.md](linux-testing-wsl-vm.md) | 环境准备、MySQL 校验、WSL/虚拟机测试 |
-| **协作与部署** | [setup-github.md](setup-github.md)、[deploy.md](deploy.md) | GitHub 仓库关联与推送；Docker/生产部署步骤 |
+| **用户** | [user/user-manual.md](user/user-manual.md) | **用户使用说明书**：登录、各功能操作与常见问题 |
+| **总需求** | [project/requirements.md](project/requirements.md) | 产品目标、用户场景、功能范围、阶段与优先级 |
+| **设计/Plan** | [design/](design/) | 各阶段需求与设计（见下表） |
+| **模板** | [design/_template-plan.md](design/_template-plan.md) | 新建局部规划时复制此模板 |
+| **进度** | [project/plan-project-progress.md](project/plan-project-progress.md) | 进度评估、里程碑、周期工作 |
+| **技术概览** | [project/core-technology-overview.md](project/core-technology-overview.md) | 各主要功能核心技术讲解 |
+| **环境与测试** | [environment/testing-steps.md](environment/testing-steps.md)、[environment/check-mysql.md](environment/check-mysql.md)、[environment/linux-testing-wsl-vm.md](environment/linux-testing-wsl-vm.md) | 环境准备、MySQL 校验、WSL/虚拟机 |
+| **部署** | [deploy/deploy.md](deploy/deploy.md)、[deploy/setup-github.md](deploy/setup-github.md) | Docker/生产部署；GitHub 协作 |
+| **教程** | [guides/dbeaver-tutorial.md](guides/dbeaver-tutorial.md) | DBeaver 使用教程 |
+
+### 当前 Plan / 设计文档（design/）
+
+| 文档 | 对应阶段/模块 |
+|------|----------------|
+| [design-login.md](design/design-login.md) | 阶段 1：登录、登出、注册、修改密码 |
+| [design-dashboard.md](design/design-dashboard.md) | 阶段 1：仪表盘布局与多界面骨架 |
+| [design-monitor.md](design/design-monitor.md) | 阶段 2：本机系统监控（CPU/内存/磁盘/网络） |
+| [design-monitor-remote.md](design/design-monitor-remote.md) | 阶段 2 扩展：远程 Linux 监控 |
+| [design-monitor-ui-enhancements.md](design/design-monitor-ui-enhancements.md) | 阶段 2：圆环、流量图、远程安装 psutil |
+| [design-sites-proxy.md](design/design-sites-proxy.md) | 阶段 3：网站与反向代理 |
+| [design-database-tasks.md](design/design-database-tasks.md) | 阶段 4：数据库与计划任务 |
+| [design-terminal.md](design/design-terminal.md) | 网页端 SSH 终端（连接/断开、数据流、故障排查） |
+
+阶段 5 或其它新增模块的规划，建议复制 [design/_template-plan.md](design/_template-plan.md) 生成新的 `design-*.md` 或 `plan-*.md`，放在 `design/` 下。
 
 ---
 
@@ -36,20 +89,4 @@
 8. **本阶段完成清单** — 可勾选的任务列表，用于验收与提交
 9. **文档更新记录** — 变更日期与说明
 
-新建 Plan 时：复制 [\_template-plan.md](_template-plan.md)，重命名为 `plan-<模块名>.md` 或延续现有 `design-<模块名>.md`，按节填写即可。若某模块需单独章节（如「前置条件」「配置方式」），可插入在 1、2 节之后，后续章节顺延编号。
-
----
-
-## 当前 Plan / 设计文档
-
-| 文档 | 对应阶段/模块 |
-|------|----------------|
-| [design-login.md](design-login.md) | 阶段 1：登录、登出、注册、修改密码 |
-| [design-dashboard.md](design-dashboard.md) | 阶段 1：仪表盘布局与多界面骨架 |
-| [design-monitor.md](design-monitor.md) | 阶段 2：本机系统监控（CPU/内存/磁盘/网络） |
-| [design-monitor-remote.md](design-monitor-remote.md) | 阶段 2 扩展：远程 Linux 监控（SSH + 采集脚本） |
-| [design-sites-proxy.md](design-sites-proxy.md) | 阶段 3：网站与反向代理（站点 CRUD、Nginx 配置与生效） |
-| [plan-project-progress.md](plan-project-progress.md) | 项目整体：进度评估、里程碑重排、周期工作安排 |
-| [core-technology-overview.md](core-technology-overview.md) | 项目整体：各主要功能的核心技术讲解 |
-
-阶段 3（网站与反向代理）、阶段 4（数据库管理）等的新规划，建议直接使用 `_template-plan.md` 生成新的 `plan-*.md` 或 `design-*.md`。
+新建 Plan 时：复制 [design/_template-plan.md](design/_template-plan.md)，重命名为 `design-<模块名>.md` 或 `plan-<模块名>.md`，放在 `design/` 目录下，按节填写即可。

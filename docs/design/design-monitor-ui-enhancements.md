@@ -1,6 +1,6 @@
 # 系统监控页 UI 与能力增强：需求与设计（Plan）
 
-本文档为系统监控页的三项增强：圆环百分比展示、流量曲线图、远程一键安装 psutil。格式与 [docs/README.md](README.md) 中「Plan 格式说明」一致；依赖 [design-monitor.md](design-monitor.md)、[design-monitor-remote.md](design-monitor-remote.md)。
+本文档为系统监控页的三项增强：圆环百分比展示、流量曲线图、远程一键安装 psutil。格式与 [docs/README.md](../README.md) 中「Plan 格式说明」一致；依赖 [design-monitor.md](design-monitor.md)、[design-monitor-remote.md](design-monitor-remote.md)。
 
 ---
 

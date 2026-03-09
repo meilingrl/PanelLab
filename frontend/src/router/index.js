@@ -38,6 +38,11 @@ const routes = [
         name: 'Databases',
         component: () => import('../views/dashboard/Databases.vue'),
       },
+      {
+        path: 'terminal',
+        name: 'Terminal',
+        component: () => import('../views/dashboard/Terminal.vue'),
+      },
     ],
   },
 ]

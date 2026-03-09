@@ -1,6 +1,6 @@
 # PanelLab 本地/演示用：MySQL + 应用
 # 首次运行：docker compose up -d mysql，等待就绪后执行 init_db，再 docker compose up -d app
-# 详见 docs/deploy.md
+# 详见 docs/deploy/deploy.md
 
 services:
   mysql:

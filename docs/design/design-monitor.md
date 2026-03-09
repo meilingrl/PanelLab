@@ -1,6 +1,6 @@
 # 系统监控：需求与设计（阶段 2）
 
-本文档为阶段 2 本机系统监控的 Plan，格式与 [docs/README.md](README.md) 中「Plan 格式说明」一致。
+本文档为阶段 2 本机系统监控的 Plan，格式与 [docs/README.md](../README.md) 中「Plan 格式说明」一致。
 
 ---
 

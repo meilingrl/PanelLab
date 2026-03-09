@@ -206,11 +206,11 @@ def _ssh_run_and_get_stats(host: str, port: int, username: str, password: str) -
 
 @router.get("/remote-config")
 def get_remote_config(
-    _user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """返回当前保存的远程连接配置（不含密码）。"""
-    row = db.query(MonitorRemoteConfig).first()
+    """返回当前用户保存的远程连接配置（不含密码）。"""
+    row = db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).first()
     if not row:
         return {"configured": False}
     return {
@@ -224,13 +224,13 @@ def get_remote_config(
 @router.put("/remote-config")
 def put_remote_config(
     body: RemoteConfigBody,
-    _user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """保存远程连接配置（IP、端口、用户名、密码），密码加密存储。"""
+    """保存当前用户的远程连接配置（IP、端口、用户名、密码），密码加密存储。"""
     settings = get_settings()
     encrypted = encrypt_password(settings.secret_key, body.password)
-    row = db.query(MonitorRemoteConfig).first()
+    row = db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).first()
     if row:
         row.host = body.host.strip()
         row.port = body.port
@@ -238,6 +238,7 @@ def put_remote_config(
         row.password_encrypted = encrypted
     else:
         row = MonitorRemoteConfig(
+            user_id=current_user.id,
             host=body.host.strip(),
             port=body.port,
             username=body.username.strip(),
@@ -304,11 +305,11 @@ def _ssh_install_psutil(host: str, port: int, username: str, password: str) -> D
 
 @router.post("/remote-install-psutil")
 def post_remote_install_psutil(
-    _user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
     """在已配置的远程主机上执行安装 psutil；未配置返回 503。"""
-    row = db.query(MonitorRemoteConfig).first()
+    row = db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).first()
     if not row:
         return JSONResponse(
             status_code=503,
@@ -403,13 +404,13 @@ def get_processes(
 
 @router.get("/stats")
 def get_stats(
-    _user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     target: str = Query("local", description="local | remote"),
 ):
     """返回指定目标（本机或远程）的 CPU、内存、磁盘、网络快照，需登录。"""
     if target == "remote":
-        row = db.query(MonitorRemoteConfig).first()
+        row = db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).first()
         if not row:
             return JSONResponse(
                 status_code=503,
