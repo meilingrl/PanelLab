@@ -1,145 +1,115 @@
 # PanelLab
 
-轻量级服务器运维管理面板（课程实践项目），目标为可实际使用的自用软件，复刻宝塔面板核心能力并适度扩展。
+轻量级服务器运维管理面板。复刻宝塔面板核心能力并适度扩展，支持单机与多机管理，适合自用或课程实践。
 
 ---
 
-## 项目定位与目标
+## 快速开始
 
-- **产品名**：PanelLab
-- **主要用户**：本人自用；若完成用户体系，可支持多用户（内网/公网场景）
-- **使用场景**：公网访问为主；部署在固定机器（单台服务器），后续可扩展为管理多台服务器
-- **质量目标**：在独立开发与课程学习基础上，尽量提高完成度与可用性；UI 美观、功能清晰可用
+```bash
+# 1. 创建 MySQL 数据库并配置 backend/.env（见下方「环境配置」）
+# 2. 后端
+cd backend && python -m venv .venv && .venv\Scripts\activate  # Windows
+pip install -r requirements.txt && python -m init_db && uvicorn main:app --reload
+
+# 3. 前端（新开终端）
+cd frontend && npm install && npm run dev
+```
+
+浏览器访问前端提示的地址（如 http://localhost:5173），默认账号 `admin`，密码见 `.env` 中 `INIT_ADMIN_PASSWORD`（默认 `admin`）。
 
 ---
 
-## 需求概要
+## 项目概览
 
-| 维度 | 说明 |
+| 项目 | 说明 |
 |------|------|
-| **用户与登录** | 优先做出用户管理系统；完成度较高时可实现：手机号短信登录、微信/QQ 等第三方登录 |
-| **必须功能** | 登录、仪表盘、系统监控、网站/反向代理、数据库管理（缺一不可） |
-| **扩展方向** | 在可能情况下支持管理多台服务器（宝塔多为单机，可作差异化） |
-| **访问与权限** | 单用户即可满足当前需求；公网访问；若仅内网/本机则多用户意义不大 |
-| **部署** | 固定机器部署；安装方式后续补充（如一键脚本、Docker、手动步骤）；打包与分发方式待学习 |
-
-- 总需求与阶段规划：[docs/project/requirements.md](docs/project/requirements.md)
-- 文档索引与 Plan 说明（局部规划格式）：[docs/README.md](docs/README.md)
-
----
-
-## 开发环境说明：Windows 开发、Linux 目标
-
-- **结论**：在 Windows 上开发、最终软件跑在 Linux 上，**完全可行**，且很常见。
-- **建议做法**：
-  - 本地用 Windows + WSL2 或虚拟机跑一个 Linux，在 Linux 里测「真实环境」（Nginx、systemd、路径等）。
-  - 后端/前端代码在 Windows 用 VS Code/Cursor 写，在 WSL 或远程 Linux 上运行与调试。
-  - 涉及系统调用的部分（如执行 shell、读 `/etc`、进程列表）尽量抽象成接口，在开发机用 Mock 或 WSL 测，定期在真实 Linux 上做一次集成测试。
-- **注意**：路径、换行符、权限等要在 Linux 上验证，避免只在本机 Windows 通过就认为没问题。
-- **操作指南**：如何用 WSL2 与虚拟机做 Linux 端运行与测试，见 [docs/environment/linux-testing-wsl-vm.md](docs/environment/linux-testing-wsl-vm.md)。
+| **定位** | 可实际使用的自用运维面板；完成用户体系后可支持多用户 |
+| **场景** | 公网/内网访问；单机部署，后续可扩展多台服务器集中管理 |
+| **目标** | UI 清晰美观，功能完整可用；开发环境 Windows，运行目标 Linux |
 
 ---
 
 ## 功能范围
 
-### 必须实现（MVP）
+### 已实现 / MVP
 
-- 用户体系：登录 / 登出（至少账号密码）
-- 仪表盘：概览信息（系统状态、快捷入口）
-- 系统监控：CPU、内存、磁盘、网络等
-- 网站与反向代理：站点列表、添加/编辑、反向代理配置
-- 数据库管理：数据库列表、创建/删除、基础管理
+- **用户与登录**：账号密码登录/登出、注册、修改密码、JWT 鉴权
+- **仪表盘**：概览、系统状态、快捷入口、多页面骨架
+- **系统监控**：本机与远程 Linux 的 CPU、内存、磁盘、网络监控
+- **网页端终端**：基于 WebSocket 的 SSH 终端，连接远程服务器执行命令
+- **网站与反向代理**：规划中（站点 CRUD、Nginx 反向代理）
+- **数据库管理**：规划中（MySQL 库/用户管理）
 
-### 可选 / 进阶
+### 规划中 / 扩展
 
-- 用户管理：多用户、角色（如管理员/只读）
-- 登录方式：手机号+短信验证码、微信/QQ 等第三方登录
-- 计划任务：定时任务配置与管理
-- 安全与加固：防火墙规则、SSH、日志审计等
+- 登录增强：手机验证码、微信/QQ 扫码
+- 终端增强：常用指令库、简易 AI 对话
+- 用户体验：服务指南、厂商导航、反馈信箱、服务器账号密码库
+- 多服务器：地图展示多机分布与状态
+- 网站与域名：域名绑定、SSL 证书
+- 服务器文件管理：远程文件浏览、上传下载、在线编辑
+- 流量与访问统计：流量监控、访问日志解析与统计
 
-### 扩展方向
-
-- **多服务器管理**：在单机版稳定后，可考虑「面板中台 + 多台被控机」架构，实现集中管理多台 Linux 服务器。
-
----
-
-## 开发计划（建议顺序）
-
-在无严格时间约束下，建议按「可运行、可演示」的节奏推进，每阶段都有一块可用的功能。
-
-| 阶段 | 内容 | 产出 |
-|------|------|------|
-| **0** | 技术选型与 Hello 面板 | 前后端打通、本地可访问空白面板 |
-| **1** | 用户体系与仪表盘 | 登录/登出、仪表盘骨架（已完成，见 [design-login](docs/design/design-login.md)、[design-dashboard](docs/design/design-dashboard.md)） |
-| **2** | 系统监控与进程管理 | 本机 + 远程 Linux 监控（已完成，见 [design-monitor](docs/design/design-monitor.md)、[design-monitor-remote](docs/design/design-monitor-remote.md)）；进程列表待做 |
-| **3** | 网站与反向代理 | 站点 CRUD、Nginx 反向代理配置与生效 |
-| **4** | 数据库与计划任务 | MySQL 库/用户管理、计划任务（cron）管理 |
-| **5** | 安全与部署、多机扩展（可选） | 权限与审计、部署文档、可选多服务器架构 |
-
-计划任务若时间紧可并入阶段 4 或延后；多服务器、第三方登录等放在主流程稳定后再做。
+详见：[功能构想与路线图](docs/project/feature-roadmap.md)
 
 ---
 
-## 技术栈与可选技术点
+## 技术栈
 
-### 当前技术栈
+| 层级 | 技术 |
+|------|------|
+| 后端 | Python 3.10+、FastAPI、MySQL 8.0+ |
+| 前端 | Vue 3、Vite、Pinia |
+| 终端 | xterm.js、WebSocket、Paramiko（SSH） |
 
-- **后端**：Python + FastAPI
-- **前端**：Vue 3
-- **数据库**：MySQL
+---
 
-### 可选技术点（可按兴趣/课程选做）
+## 目录结构
 
-- **前端**：Vue 3 组合式 API、Pinia 状态管理、前端路由与权限、UI 组件库（Element Plus / Naive UI / 等）统一风格
-- **后端**：FastAPI 依赖注入与中间件、JWT 与 Session、异步与后台任务（Celery/ARQ 等）
-- **运维与部署**：Docker 容器化、Nginx 反向代理与 HTTPS、systemd 服务、简单 CI（如 GitHub Actions）
-- **第三方**：短信接口（阿里云/腾讯云）、微信/QQ OAuth、对象存储（可选）
+```
+PanelLab/
+├── backend/     # FastAPI 后端、API、WebSocket、SSH 桥接
+├── frontend/    # Vue 3 前端
+├── docs/        # 需求、设计（Plan）、环境与部署文档
+└── README.md
+```
 
 ---
 
 ## 环境要求
 
 - **Python** 3.10+
-- **Node.js** 18+（前端开发）
+- **Node.js** 18+
 - **MySQL** 8.0+（或 5.7+）
 
-## 目录结构
-
-```
-PanelLab/
-├── backend/     # 后端 API（FastAPI + MySQL）
-├── frontend/    # 前端（Vue 3 + Vite）
-├── docs/        # 需求、设计（Plan）、环境与测试文档，见 docs/README.md
-└── README.md
-```
+---
 
 ## 环境配置
 
-### 1. 数据库（MySQL）
+### 1. 数据库
 
-1. 安装并启动 MySQL（本地或 Docker 均可）。
-2. 创建专用于本项目的数据库，例如：
-   ```sql
-   CREATE DATABASE panel_lab CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-   CREATE USER 'panel_lab'@'localhost' IDENTIFIED BY '你的密码';
-   GRANT ALL PRIVILEGES ON panel_lab.* TO 'panel_lab'@'localhost';
-   FLUSH PRIVILEGES;
-   ```
-3. 在 `backend` 目录下复制环境变量示例并填写实际配置：
-   ```bash
-   cd backend
-   cp .env.example .env
-   ```
-   编辑 `.env`，填写 `MYSQL_*` 等变量（数据库名、用户名、密码、主机、端口）。
+安装并启动 MySQL，创建库与用户：
+
+```sql
+CREATE DATABASE panel_lab CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'panel_lab'@'localhost' IDENTIFIED BY '你的密码';
+GRANT ALL PRIVILEGES ON panel_lab.* TO 'panel_lab'@'localhost';
+FLUSH PRIVILEGES;
+```
 
 ### 2. 后端
 
 ```bash
 cd backend
+cp .env.example .env
+# 编辑 .env：MYSQL_*、INIT_ADMIN_PASSWORD 等
+
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
+python -m init_db    # 首次运行：建表并创建默认管理员
 ```
 
 ### 3. 前端
@@ -149,18 +119,36 @@ cd frontend
 npm install
 ```
 
-## 开始开发
+---
 
-- **后端**：在 `backend` 目录激活虚拟环境后运行：
-  ```bash
-  uvicorn main:app --reload
-  ```
-  服务地址默认：http://localhost:8000 ；接口测试：http://localhost:8000/api/health
-- **首次使用登录功能**：建库并配置好 `.env` 后，在 `backend` 目录执行一次初始化（创建用户表并写入默认管理员）：
-  ```bash
-  python -m init_db
-  ```
-  默认管理员用户名：`admin`，密码为 `.env` 中的 `INIT_ADMIN_PASSWORD`（默认 `admin`）。之后可在登录页使用该账号登录。若需修改密码，在 `backend` 目录执行：`python change_password.py admin 你的新密码`。
-- **前端**：在 `frontend` 目录运行 `npm run dev`，浏览器打开终端提示的地址（如 http://localhost:5173 ）。登录页输入上述账号密码即可进入仪表盘。
+## 运行与登录
 
-完整测试步骤（含前置条件、后端/前端启动、浏览器验证、可选 WSL 测试）见 [docs/environment/testing-steps.md](docs/environment/testing-steps.md)。
+| 步骤 | 命令 | 说明 |
+|------|------|------|
+| 启动后端 | `uvicorn main:app --reload`（在 backend 目录、已激活 venv） | 默认 http://localhost:8000 |
+| 启动前端 | `npm run dev`（在 frontend 目录） | 默认 http://localhost:5173 |
+| 首次登录 | 用户名 `admin`，密码为 `.env` 中 `INIT_ADMIN_PASSWORD` | 修改密码：`python change_password.py admin 新密码` |
+
+- 健康检查：http://localhost:8000/api/health  
+- 完整测试与验收步骤：[docs/environment/testing-steps.md](docs/environment/testing-steps.md)
+
+---
+
+## 开发说明
+
+- **开发环境**：推荐在 Windows 上开发，用 WSL2 或虚拟机中的 Linux 做真实环境测试（Nginx、路径、权限等）。
+- **目标环境**：软件面向 Linux 部署；涉及系统调用的部分需在 Linux 上验证。  
+  详见：[docs/environment/linux-testing-wsl-vm.md](docs/environment/linux-testing-wsl-vm.md)
+
+---
+
+## 文档索引
+
+| 文档 | 说明 |
+|------|------|
+| [docs/README.md](docs/README.md) | 文档总索引与 Plan 列表 |
+| [docs/project/requirements.md](docs/project/requirements.md) | 总需求与阶段规划 |
+| [docs/project/feature-roadmap.md](docs/project/feature-roadmap.md) | 功能构想与实现顺序 |
+| [docs/user/user-manual.md](docs/user/user-manual.md) | 用户使用说明书 |
+| [docs/environment/testing-steps.md](docs/environment/testing-steps.md) | 完整测试步骤 |
+| [docs/deploy/deploy.md](docs/deploy/deploy.md) | 部署说明 |
