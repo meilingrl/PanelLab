@@ -75,7 +75,7 @@ router.beforeEach((to, _from, next) => {
   const token = getToken()
   if (to.meta.public) {
     if (token && (to.name === 'Login' || to.name === 'Register')) {
-      next({ name: 'Overview' })
+      next({ path: '/settings' })
     } else {
       next()
     }

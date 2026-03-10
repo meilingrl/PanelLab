@@ -2,9 +2,11 @@
 import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getTheme, toggleTheme } from '../theme'
+import { useTerminalStore } from '../composables/useTerminalStore'
 
 const router = useRouter()
 const route = useRoute()
+const terminalStore = useTerminalStore()
 const theme = ref(getTheme())
 const currentUser = ref({ username: '' })
 
@@ -21,20 +23,19 @@ onMounted(async () => {
 })
 
 const navItems = [
-  { path: '/', name: '概览', icon: '📊' },
+  { path: '/settings', name: '用户中心', icon: '👤' },
   { path: '/monitor', name: '系统监控', icon: '📈' },
   { path: '/terminal', name: '终端控制', icon: '💻' },
   { path: '/sites', name: '网站与反向代理', icon: '🌐' },
   { path: '/databases', name: '数据库管理', icon: '🗄️' },
-  { path: '/settings', name: '用户中心', icon: '👤' },
 ]
 
 function isActive(path) {
-  if (path === '/') return route.path === '/'
   return route.path.startsWith(path)
 }
 
 function onLogout() {
+  terminalStore.closeAllSessions()
   localStorage.removeItem('panel_token')
   router.push('/login')
 }
@@ -44,7 +45,7 @@ function onToggleTheme() {
 }
 
 function goOverview() {
-  router.push('/')
+  router.push('/settings')
 }
 </script>
 
