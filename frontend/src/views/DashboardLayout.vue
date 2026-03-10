@@ -2,13 +2,11 @@
 import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getTheme, toggleTheme } from '../theme'
-import ChangePasswordModal from '../components/ChangePasswordModal.vue'
 
 const router = useRouter()
 const route = useRoute()
 const theme = ref(getTheme())
 const currentUser = ref({ username: '' })
-const showChangePassword = ref(false)
 
 onMounted(async () => {
   try {
@@ -28,6 +26,7 @@ const navItems = [
   { path: '/terminal', name: '终端控制', icon: '💻' },
   { path: '/sites', name: '网站与反向代理', icon: '🌐' },
   { path: '/databases', name: '数据库管理', icon: '🗄️' },
+  { path: '/settings', name: '用户中心', icon: '👤' },
 ]
 
 function isActive(path) {
@@ -46,10 +45,6 @@ function onToggleTheme() {
 
 function goOverview() {
   router.push('/')
-}
-
-function openChangePassword() {
-  showChangePassword.value = true
 }
 </script>
 
@@ -84,25 +79,28 @@ function openChangePassword() {
           >
             {{ theme === 'light' ? '🌙' : '☀️' }}
           </button>
-          <button type="button" class="btn-side" @click="openChangePassword">修改密码</button>
           <button type="button" class="btn-side" @click="onLogout">退出</button>
         </div>
       </div>
     </aside>
     <main class="main">
-      <router-view />
+      <div class="main-content">
+        <router-view />
+      </div>
+      <footer class="global-footer">
+        <span class="footer-copy">PanelLab</span>
+        <div class="footer-links">
+          <router-link to="/settings" class="footer-link">用户中心</router-link>
+        </div>
+      </footer>
     </main>
-    <ChangePasswordModal
-      :show="showChangePassword"
-      @close="showChangePassword = false"
-      @success="showChangePassword = false"
-    />
   </div>
 </template>
 
 <style scoped>
 .dashboard-layout {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: flex;
   background: var(--bg-primary);
   background-image: var(--texture);
@@ -171,12 +169,24 @@ function openChangePassword() {
 }
 
 .sidebar-footer {
-  padding: 1rem 1.25rem;
+  flex-shrink: 0;
+  height: 56px;
+  min-height: 56px;
+  padding: 0 1.25rem;
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .user-info {
-  margin-bottom: 0.5rem;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-name {
@@ -186,8 +196,9 @@ function openChangePassword() {
 
 .footer-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-shrink: 0;
   gap: 0.5rem;
+  margin-left: auto;
 }
 
 .btn-side {
@@ -209,6 +220,48 @@ function openChangePassword() {
 .main {
   flex: 1;
   min-width: 0;
-  padding: 2rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.main-content {
+  flex: 1;
+  min-width: 0;
+  padding: 2rem 1.5rem 2rem 1.5rem;
+  overflow-y: auto;
+}
+
+.global-footer {
+  flex-shrink: 0;
+  height: 56px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.5rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.footer-copy {
+  color: var(--text-muted);
+}
+
+.footer-links {
+  display: flex;
+  gap: 1.25rem;
+}
+
+.footer-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.footer-link:hover {
+  color: var(--text-primary);
 }
 </style>

@@ -222,12 +222,12 @@ onBeforeUnmount(() => {
 }
 
 .btn-terminal {
-  padding: 0.4rem 1rem;
-  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
   color: var(--text-primary);
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
 }

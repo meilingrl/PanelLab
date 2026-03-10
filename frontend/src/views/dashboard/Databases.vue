@@ -522,9 +522,9 @@ onMounted(() => {
 .btn-primary,
 .btn-secondary,
 .btn-danger {
-  padding: 0.45rem 0.85rem;
+  padding: 0.5rem 1rem;
   border-radius: 6px;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   cursor: pointer;
 }
 .btn-primary {
