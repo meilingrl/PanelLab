@@ -24,6 +24,7 @@ def db_setup():
     try:
         now = datetime.utcnow()
         db.add(User(
+            id=1,
             username="admin",
             password_hash=bcrypt.hashpw(b"admin", bcrypt.gensalt()).decode("ascii"),
             created_at=now,

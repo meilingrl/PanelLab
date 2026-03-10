@@ -15,6 +15,31 @@ from models import User, Server
 
 def run_migration():
     with engine.connect() as conn:
+        # 若之前已加过外键，先删除以便修改 users.id 类型
+        for fk_name, table in (("fk_site_configs_user", "site_configs"), ("fk_monitor_remote_config_user", "monitor_remote_config")):
+            try:
+                conn.execute(text(f"ALTER TABLE {table} DROP FOREIGN KEY {fk_name}"))
+                conn.commit()
+                print(f"{table}: 已删除旧外键 {fk_name}")
+            except Exception as e:
+                conn.rollback()
+                if "1091" in str(e) or "check that it exists" in str(e).lower() or "Can't DROP" in str(e):
+                    pass
+                else:
+                    print(f"{table}: 删除外键时 {e}")
+
+        # 确保 users.id 为 BIGINT，与 Server/SiteConfig/MonitorRemoteConfig 的 user_id 外键类型一致（避免 MySQL 3780）
+        try:
+            conn.execute(text("ALTER TABLE users MODIFY id BIGINT NOT NULL AUTO_INCREMENT"))
+            conn.commit()
+            print("users: 已统一 id 为 BIGINT")
+        except Exception as e:
+            conn.rollback()
+            if "3780" in str(e) or "Duplicate" in str(e):
+                pass
+            else:
+                print("users: 修改 id 类型时:", e)
+
         # 获取首个用户 id，用于回填
         result = conn.execute(text("SELECT id FROM users ORDER BY id LIMIT 1"))
         row = result.fetchone()
@@ -26,7 +51,7 @@ def run_migration():
 
         # ----- site_configs -----
         try:
-            conn.execute(text("ALTER TABLE site_configs ADD COLUMN user_id INT NULL"))
+            conn.execute(text("ALTER TABLE site_configs ADD COLUMN user_id BIGINT NULL"))
             conn.commit()
             print("site_configs: 已添加 user_id 列")
         except Exception as e:
@@ -40,7 +65,7 @@ def run_migration():
         conn.commit()
 
         try:
-            conn.execute(text("ALTER TABLE site_configs MODIFY COLUMN user_id INT NOT NULL"))
+            conn.execute(text("ALTER TABLE site_configs MODIFY COLUMN user_id BIGINT NOT NULL"))
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -90,7 +115,7 @@ def run_migration():
 
         # ----- monitor_remote_config -----
         try:
-            conn.execute(text("ALTER TABLE monitor_remote_config ADD COLUMN user_id INT NULL"))
+            conn.execute(text("ALTER TABLE monitor_remote_config ADD COLUMN user_id BIGINT NULL"))
             conn.commit()
             print("monitor_remote_config: 已添加 user_id 列")
         except Exception as e:
@@ -104,7 +129,7 @@ def run_migration():
         conn.commit()
 
         try:
-            conn.execute(text("ALTER TABLE monitor_remote_config MODIFY COLUMN user_id INT NOT NULL"))
+            conn.execute(text("ALTER TABLE monitor_remote_config MODIFY COLUMN user_id BIGINT NOT NULL"))
             conn.commit()
         except Exception:
             conn.rollback()

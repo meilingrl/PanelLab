@@ -44,6 +44,7 @@ docs/
 |------|------|------|
 | **用户** | [user/user-manual.md](user/user-manual.md) | **用户使用说明书**：登录、各功能操作与常见问题 |
 | **总需求** | [project/requirements.md](project/requirements.md) | 产品目标、用户场景、功能范围、阶段与优先级 |
+| **功能路线图** | [project/feature-roadmap.md](project/feature-roadmap.md) | 登录/终端/UX/多机地图/文件管理/流量统计等构想与实现顺序 |
 | **设计/Plan** | [design/](design/) | 各阶段需求与设计（见下表） |
 | **模板** | [design/_template-plan.md](design/_template-plan.md) | 新建局部规划时复制此模板 |
 | **进度** | [project/plan-project-progress.md](project/plan-project-progress.md) | 进度评估、里程碑、周期工作 |

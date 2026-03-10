@@ -43,6 +43,21 @@ const routes = [
         name: 'Terminal',
         component: () => import('../views/dashboard/Terminal.vue'),
       },
+      {
+        path: 'manual',
+        name: 'Manual',
+        component: () => import('../views/dashboard/Manual.vue'),
+      },
+      {
+        path: 'feedback',
+        name: 'Feedback',
+        component: () => import('../views/dashboard/Feedback.vue'),
+      },
+      {
+        path: 'settings',
+        name: 'Settings',
+        component: () => import('../views/dashboard/Settings.vue'),
+      },
     ],
   },
 ]
