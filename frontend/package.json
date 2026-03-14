@@ -13,6 +13,7 @@
     "@xterm/xterm": "^6.0.0",
     "chart.js": "^4.5.1",
     "marked": "^17.0.4",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.25",
     "vue-router": "^4.6.4"
   },

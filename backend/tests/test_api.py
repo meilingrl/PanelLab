@@ -21,6 +21,65 @@ def test_login_bad_password(client):
     assert r.status_code == 401
 
 
+# ---------- 多途径登录：手机验证码（mock）----------
+
+def test_sms_send_bad_phone(client):
+    r = client.post("/api/auth/sms/send", json={"phone": "123"})
+    assert r.status_code == 422  # validation error
+    r2 = client.post("/api/auth/sms/send", json={"phone": "1380013800"})
+    assert r2.status_code == 422
+
+
+def test_sms_send_ok(client):
+    r = client.post("/api/auth/sms/send", json={"phone": "13800138000"})
+    assert r.status_code == 200
+    assert "message" in r.json()
+
+
+def test_sms_send_throttle(client):
+    client.post("/api/auth/sms/send", json={"phone": "13900139000"})
+    r = client.post("/api/auth/sms/send", json={"phone": "13900139000"})
+    assert r.status_code == 429
+
+
+def test_sms_login_no_code(client):
+    r = client.post("/api/auth/sms/login", json={"phone": "13800138000", "code": "000000"})
+    assert r.status_code == 401
+
+
+def test_sms_login_ok(client):
+    client.post("/api/auth/sms/send", json={"phone": "13700137000"})
+    r = client.post("/api/auth/sms/login", json={"phone": "13700137000", "code": "123456"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "token" in data
+    assert data.get("user", {}).get("username", "").startswith("phone_")
+
+
+def test_sms_login_wrong_code(client):
+    client.post("/api/auth/sms/send", json={"phone": "13600136000"})
+    r = client.post("/api/auth/sms/login", json={"phone": "13600136000", "code": "999999"})
+    assert r.status_code == 401
+
+
+# ---------- 多途径登录：微信/QQ mock ----------
+
+def test_wechat_callback_mock(client):
+    r = client.post("/api/auth/wechat/callback")
+    assert r.status_code == 200
+    data = r.json()
+    assert "token" in data
+    assert data.get("user", {}).get("username", "").startswith("wx_")
+
+
+def test_qq_callback_mock(client):
+    r = client.post("/api/auth/qq/callback")
+    assert r.status_code == 200
+    data = r.json()
+    assert "token" in data
+    assert data.get("user", {}).get("username", "").startswith("qq_")
+
+
 def test_monitor_stats_unauthorized(client):
     r = client.get("/api/monitor/stats?target=local")
     assert r.status_code == 401

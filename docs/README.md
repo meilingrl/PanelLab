@@ -65,6 +65,8 @@ docs/
 | [design-sites-proxy.md](design/design-sites-proxy.md) | 阶段 3：网站与反向代理 |
 | [design-database-tasks.md](design/design-database-tasks.md) | 阶段 4：数据库与计划任务 |
 | [design-terminal.md](design/design-terminal.md) | 网页端 SSH 终端（连接/断开、数据流、故障排查） |
+| [design-login-multi.md](design/design-login-multi.md) | 多途径登录：手机验证码、微信/QQ 扫码（需求与接口） |
+| [design-sms-login.md](design/design-sms-login.md) | 手机验证码登录：技术实现与资源准备（含阿里云短信开通） |
 
 阶段 5 或其它新增模块的规划，建议复制 [design/_template-plan.md](design/_template-plan.md) 生成新的 `design-*.md` 或 `plan-*.md`，放在 `design/` 下。
 

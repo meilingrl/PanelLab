@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     nginx_cmd_timeout_seconds: int = 15
     nginx_skip_apply: bool = False
 
+    # 多途径登录：微信开放平台 / QQ 互联（不配置则走 mock）
+    wechat_app_id: str = ""
+    wechat_app_secret: str = ""
+    wechat_redirect_uri: str = ""  # 后端回调完整 URL，如 http://localhost:8000/api/auth/wechat/callback
+    qq_app_id: str = ""
+    qq_app_key: str = ""
+    qq_redirect_uri: str = ""  # 如 http://localhost:8000/api/auth/qq/callback
+    frontend_origin: str = "http://localhost:5173"  # 回调成功后跳转的前端地址，用于带 token 重定向
+
 
 def get_settings() -> Settings:
     return Settings()
