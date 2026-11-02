@@ -1,10 +1,12 @@
-# PanelLab 生产部署说明
+# PanelLab 部署说明与生产边界
 
-本文档说明如何用 Docker 或传统方式部署 PanelLab。
+本文档区分本地演示与生产模式。当前分支已补充入口防护与站点变更流程，但不代表整站生产验收；先读[验证记录与剩余风险](../project/production-readiness-20261102.md)。
+
+**现有 docker-compose.yml 是本地演示配置**，含固定数据库口令，不可直接公开部署。应用 Dockerfile 也未安装 Nginx；站点管理作用于应用所在文件系统和命令环境，不会自动管理宿主机 Nginx。不要为方便而给面板挂载生产 Docker socket。真实站点应用优先在明确权限的 Linux 环境安装 Nginx 并配置下述路径/命令。
 
 ---
 
-## 一、Docker 部署（推荐）
+## 一、Docker 本地演示
 
 ### 1.1 使用 docker-compose（含 MySQL）
 
@@ -45,8 +47,9 @@ docker run -d -p 8000:8000 \
   -e MYSQL_USER=panel_lab \
   -e MYSQL_PASSWORD=你的密码 \
   -e MYSQL_DATABASE=panel_lab \
-  -e SECRET_KEY=强随机密钥 \
-  -e INIT_ADMIN_PASSWORD=管理员密码 \
+  -e APP_ENV=production \
+  -e SECRET_KEY=替换为至少32字符的独立随机密钥 \
+  -e INIT_ADMIN_PASSWORD=替换为至少12字符的独立强密码 \
   panellab
 ```
 
@@ -77,12 +80,31 @@ docker exec -it <容器ID> python -m init_db
 
 ---
 
-## 三、安全与生产建议
+## 三、生产模式配置
 
-- **SECRET_KEY**：生产环境必须改为强随机字符串。  
-- **INIT_ADMIN_PASSWORD**：首次初始化后建议用「修改密码」或 `change_password.py` 修改。  
-- **HTTPS**：生产建议在 Nginx 或负载均衡层配置 TLS，后端可仅监听内网。  
-- **防火墙**：仅开放必要端口（如 8000 或 80/443）。
+先在隔离环境验证，配置示意如下。示意文本不能直接作为生产密码使用：
+
+```dotenv
+APP_ENV=production
+SECRET_KEY=<至少32字符的独立随机密钥>
+INIT_ADMIN_PASSWORD=<至少12字符的强密码>
+OPERATOR_USERNAMES=admin
+ENABLE_DEMO_AUTH=false
+NGINX_SKIP_APPLY=false
+NGINX_CONF_DIR=/etc/nginx/panellab.d
+NGINX_TEST_CMD=nginx -t
+NGINX_RELOAD_CMD=nginx -s reload
+NGINX_CMD_TIMEOUT_SECONDS=15
+```
+
+- 在 Nginx 主配置的 `http` 段 include 该专用目录的 `*.conf`；面板进程需要此目录读写与指定实例校验/重载的权限。不要让不同实例误用默认 pid 或配置路径；必要时在命令里显式指定 `-c` 和 `-p`。
+- 目录专用于 PanelLab，可减少对手写站点的干扰。现有配置可作为预览基线，但不支持符号链接及超限配置；预览不会创建目录或运行 Nginx。
+- 生产关闭注册、SMS、微信和 QQ 登录；普通账号不能读取或操作站点与 MySQL 管理。`OPERATOR_USERNAMES` 是可信账号白名单，不提供完整 RBAC 或租户隔离。
+- 首次进入生产使用新 SECRET_KEY，使旧开发 JWT 无效；检查已有账号并更新密码。`INIT_ADMIN_PASSWORD` 只影响首次创建，不轮换已有账号。
+- 生产校验会拒绝示例/短密钥、短初始密码、演示认证、跳过应用。长度校验不等于密码强度评估。
+- 使用 HTTPS 与内网后端监听。SSH 主机密钥信任及终端票据仍需改造，现有功能不得据此宣称已完成全面安全加固。
+- 保留数据库、Nginx 主配置和受管目录备份。变更记录不是备份系统；`pending` 或 `recovery_failed` 必须人工核对，禁止无条件重放。
+- 原 `/api/sites` 写接口返回 428，客户端应先请求 `/api/site-changes/preview`，再携返回凭证请求 `/execute`。
 
 ---
 

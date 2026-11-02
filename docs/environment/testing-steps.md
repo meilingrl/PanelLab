@@ -1,6 +1,32 @@
 # PanelLab 完整测试步骤
 
-按顺序执行以下步骤，完成「登录功能」从环境到浏览器、再到（可选）WSL 的完整验证。
+以下历史步骤覆盖登录与基础功能。站点变更分支先运行下面的自动检查；真实服务验证使用脚本自行创建的隔离实例。
+
+## 站点变更自动检查
+
+```bash
+cd backend
+python -m pip install -r requirements-dev.txt
+python -m pytest tests -q
+cd ../frontend
+npm ci
+npm test
+npm run build
+```
+
+## 真实 MySQL + Linux Nginx 隔离验收
+
+需要 Docker、后端测试依赖，以及预先获取的测试镜像：
+
+```bash
+docker pull mysql:8.4.9
+docker pull nginx:stable-alpine
+python scripts/verify_site_change_lab.py
+```
+
+从仓库根目录运行。脚本新建临时 MySQL（tmpfs 数据目录）和 Nginx 容器，仅监听本机随机端口；配置放在忽略的 `data/` 临时子目录。结束时只移除脚本自建容器和临时文件，不使用已有数据库、站点或系统 Nginx。Docker/Colima 必须共享当前仓库路径。
+
+检查真实页面 A→B、重放拒绝、外部漂移拒绝、语法失败恢复、重载失败后的恢复、恢复失败显式状态、删除与历史保留。HTTP 探针绕过环境代理。这个脚本不验证公网 TLS、远程主机、生产负载、宕机恢复或所有 MySQL 版本。镜像标签可能更新；实际运行版本记录在交付记录。
 
 ---
 
@@ -14,7 +40,7 @@
 2. **后端 `.env`** 已配置：  
    在 `backend` 目录存在 `.env`，且已填写 `MYSQL_HOST`、`MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DATABASE`、`SECRET_KEY`、`INIT_ADMIN_PASSWORD`（可选，默认 `admin`）。
 
-3. **Python 3.10+**、**Node.js 18+** 已安装。
+3. **Python 3.10+**、**Node.js 20.19+ 或 22.12+** 已安装。
 
 ---
 

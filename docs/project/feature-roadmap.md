@@ -1,5 +1,7 @@
 # PanelLab 功能构想与路线图
 
+> 2026-11-02 当前迭代：优先做深[可审查、可恢复的站点变更](../design/design-safe-site-changes.md)，面向可信运维账号；生产关闭自助注册和第三方/演示登录。下文保留原 MVP 与历史构想，不作为本轮功能承诺或生产验收。实际实现与验证见[本轮记录](production-readiness-20261102.md)。
+
 在考虑**用户体验**和**功能完整度**的前提下，将产品构想整理为可落地的功能模块与优先级，与现有 [requirements.md](requirements.md) 及各 [design/*.md](../design/) 衔接。
 
 ---
