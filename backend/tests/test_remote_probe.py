@@ -54,7 +54,7 @@ def test_proc_stat_parser_identity_and_no_gpu(tmp_path):
         return io.BytesIO(data) if 'b' in mode else io.StringIO(data)
     from unittest.mock import patch
     output = io.StringIO()
-    with patch.object(builtins, 'open', fake_open), patch.object(os, 'listdir', return_value=['42']), patch.object(os, 'readlink', return_value='/home/runner'), patch.object(subprocess, 'run', side_effect=FileNotFoundError), patch('sys.stdout', output):
+    with patch.object(builtins, 'open', fake_open), patch.object(os, 'scandir', side_effect=lambda path: __import__('contextlib').nullcontext(iter([SimpleNamespace(name='42')]))), patch.object(os, 'readlink', return_value='/home/runner'), patch.object(subprocess, 'run', side_effect=FileNotFoundError), patch('sys.stdout', output):
         exec(compile(COLLECTOR_SCRIPT, '<collector>', 'exec'), {'__name__': '__main__'})
     value = parse_snapshot(output.getvalue().encode())
     assert value['system']['gpu'] is None
@@ -64,7 +64,7 @@ def test_proc_stat_parser_identity_and_no_gpu(tmp_path):
     assert value['system']['memory']['total_bytes'] == 1024000
     assert value['system']['network'][0]['received_bytes'] == 123
     files['/proc/42/stat'] = files['/proc/42/stat'].replace('9876', '9999')
-    with patch.object(builtins, 'open', fake_open), patch.object(os, 'listdir', return_value=['42']), patch.object(os, 'readlink', return_value='/home/runner'), patch.object(subprocess, 'run', side_effect=FileNotFoundError), patch('sys.stdout', io.StringIO()) as output2:
+    with patch.object(builtins, 'open', fake_open), patch.object(os, 'scandir', side_effect=lambda path: __import__('contextlib').nullcontext(iter([SimpleNamespace(name='42')]))), patch.object(os, 'readlink', return_value='/home/runner'), patch.object(subprocess, 'run', side_effect=FileNotFoundError), patch('sys.stdout', io.StringIO()) as output2:
         exec(compile(COLLECTOR_SCRIPT, '<collector>', 'exec'), {'__name__': '__main__'})
     assert parse_snapshot(output2.getvalue().encode())['processes'][0]['identity'] != value['processes'][0]['identity']
 
@@ -120,3 +120,42 @@ def test_tailscale_discovery_bounded_subprocess(monkeypatch):
     assert run_fixture('print("bad-json")')['available'] is False
     assert run_fixture('raise SystemExit(2)')['available'] is False
     assert run_fixture('print("x" * 600000)')['available'] is False
+
+
+def test_target_pid_beyond_picker_cap_and_permission_unknown(monkeypatch):
+    """Target is looked up directly even when discovery truncates or is denied."""
+    import builtins, io, os, subprocess, sys
+    from contextlib import nullcontext, redirect_stdout
+    from services.remote_probe import COLLECTOR_SCRIPT, parse_snapshot
+    blocked = set()
+    def fake_open(path, mode='r', *args, **kwargs):
+        path = str(path)
+        if path in blocked: raise PermissionError()
+        if path == '/proc/sys/kernel/random/boot_id': value = 'boot'
+        elif path.endswith('/stat'): value = '9999 (train) S ' + ' '.join(['1']*18 + ['2345','1'])
+        elif path.endswith('/cmdline'): return io.BytesIO(b'python\0train.py\0')
+        elif path.endswith('/status'): value = 'VmRSS: 4 kB\n'
+        else: raise FileNotFoundError()
+        return io.StringIO(value)
+    monkeypatch.setattr(builtins,'open',fake_open)
+    monkeypatch.setattr(os,'scandir',lambda path: nullcontext(iter(SimpleNamespace(name=str(i)) for i in range(1,501))))
+    monkeypatch.setattr(os,'readlink',lambda path:'/work')
+    monkeypatch.setattr(subprocess,'run',lambda *a,**k: (_ for _ in ()).throw(FileNotFoundError()))
+    def run(pid,query=None):
+        monkeypatch.setattr(sys,'argv',['-c',json.dumps({'pid':pid,'query':query})])
+        output = io.StringIO()
+        with redirect_stdout(output): exec(compile(COLLECTOR_SCRIPT,'<collector>','exec'),{})
+        return parse_snapshot(output.getvalue().encode())
+    result = run(9999)
+    assert len(result['processes']) == 200
+    assert result['target_process']['process']['pid'] == 9999
+    assert result['target_process']['status'] == 'present'
+    blocked.add('/proc/9999/stat')
+    assert run(9999)['target_process']['status'] == 'unavailable'
+    assert run(None,'not-present')['processes'] == []
+
+
+def test_process_state_survives_parser():
+    from services.remote_probe import parse_snapshot
+    payload = {'system':{'cpu':None,'memory':None,'network':None,'gpu':None},'processes':[{'pid':42,'identity':'boot:2','command':'train','state':'Z'}],'capabilities':{},'warnings':[]}
+    assert parse_snapshot(json.dumps(payload).encode())['processes'][0]['state'] == 'Z'

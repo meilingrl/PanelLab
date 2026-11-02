@@ -8,7 +8,10 @@ COLLECTOR_TIMEOUT = 20
 OUTPUT_LIMIT = 1024 * 1024
 
 COLLECTOR_SCRIPT = r'''
-import json, os, subprocess
+import json, os, subprocess, sys, itertools
+args = json.loads(sys.argv[1]) if len(sys.argv) == 2 and sys.argv[1].startswith("{") else {}
+target_pid = args.get("pid")
+query = (args.get("query") or "").casefold()
 
 def text(path, limit=65536):
     with open(path, 'r', errors='replace') as f:
@@ -40,31 +43,65 @@ try:
     result['system']['network'] = network[:200]
 except (OSError, ValueError, IndexError):
     result['warnings'].append('Network counters unavailable')
+def process(pid, boot):
+    base = '/proc/' + str(pid)
+    # Only an absent stat proves a missing PID. Permission/read/identity races
+    # remain unavailable, independent of the capped discovery list.
+    try: fields = text(base + '/stat').rsplit(')', 1)[1].split()
+    except FileNotFoundError: return {'pid': pid, 'status': 'missing', 'process': None}
+    identity = boot + ':' + fields[19]
+    with open(base + '/cmdline', 'rb') as f:
+        command = f.read(2048).replace(b'\0', b' ').decode('utf-8', errors='replace').strip()[:512]
+    entry = {'pid': pid, 'identity': identity, 'command': command, 'cpu': None, 'state': fields[0]}
+    try: entry['cwd'] = os.readlink(base + '/cwd')[:4096]
+    except OSError: pass
+    try: entry['memory_bytes'] = kib_fields(base + '/status').get('VmRSS')
+    except OSError: pass
+    if text(base + '/stat').rsplit(')', 1)[1].split()[19] != fields[19]:
+        return {'pid': pid, 'status': 'unavailable', 'process': None}
+    return {'pid': pid, 'status': 'present', 'process': entry}
+
+result['target_process'] = None
+boot = None
 try:
     boot = text('/proc/sys/kernel/random/boot_id').strip()
-    pids = sorted((int(p) for p in os.listdir('/proc') if p.isdigit()))
-    for pid in pids[:200]:
-        try:
-            base = '/proc/' + str(pid)
-            fields = text(base + '/stat').rsplit(')', 1)[1].split()
-            identity = boot + ':' + fields[19]
-            with open(base + '/cmdline', 'rb') as f:
-                command = f.read(2048).replace(b'\0', b' ').decode('utf-8', errors='replace').strip()[:512]
-            entry = {'pid': pid, 'identity': identity, 'command': command, 'cpu': None}
-            try: entry['cwd'] = os.readlink(base + '/cwd')[:4096]
-            except OSError: pass
-            try: entry['memory_bytes'] = kib_fields(base + '/status').get('VmRSS')
-            except OSError: pass
-            # Reject a PID recycled while its command/resource fields were read.
-            if text(base + '/stat').rsplit(')', 1)[1].split()[19] != fields[19]: continue
-            result['processes'].append(entry)
-        except (OSError, ValueError, IndexError):
-            continue
+    if not boot: raise ValueError()
+except (OSError, ValueError):
+    result['warnings'].append('Process identity unavailable')
+if target_pid is not None:
+    result['target_process'] = {'pid': target_pid, 'status': 'unavailable', 'process': None}
+    if boot:
+        try: result['target_process'] = process(target_pid, boot)
+        except (OSError, ValueError, IndexError): pass
+try:
+    if not boot: raise ValueError()
+    truncated = False
+    incomplete = False
+    with os.scandir('/proc') as entries:
+        for index, item in enumerate(entries):
+            if index >= 4096:
+                truncated = True
+                break
+            if not item.name.isdigit(): continue
+            if len(result['processes']) >= 200:
+                truncated = True
+                break
+            try:
+                found = process(int(item.name), boot)
+                if found['status'] != 'present':
+                    incomplete = incomplete or found['status'] == 'unavailable'
+                    continue
+                entry = found['process']
+                if query and query not in (str(entry['pid']) + ' ' + entry['command'] + ' ' + entry.get('cwd', '')).casefold(): continue
+                result['processes'].append(entry)
+            except (OSError, ValueError, IndexError): incomplete = True
     result['capabilities']['processes'] = True
-    result['capabilities']['processes_truncated'] = len(pids) > 200
+    result['capabilities']['processes_truncated'] = truncated
+    result['capabilities']['processes_incomplete'] = incomplete
 except (OSError, ValueError):
     result['capabilities']['processes'] = False
-    result['warnings'].append('Process identity unavailable')
+    result['capabilities']['processes_incomplete'] = True
+    result['warnings'].append('Process discovery unavailable')
 try:
     gpu = subprocess.run(['nvidia-smi', '--query-gpu=index,name,memory.used,memory.total,utilization.gpu', '--format=csv,noheader,nounits'],
                          capture_output=True, text=True, timeout=3, check=True)
@@ -96,16 +133,31 @@ def parse_snapshot(output):
             assert isinstance(p['identity'], str) and 0 < len(p['identity']) <= 128
             assert isinstance(p['command'], str)
             entry = {'pid': p['pid'], 'identity': p['identity'], 'command': p['command'][:512], 'cpu': None}
+            if isinstance(p.get('state'), str) and len(p['state']) == 1: entry['state'] = p['state']
             if isinstance(p.get('cwd'), str): entry['cwd'] = p['cwd'][:4096]
             if isinstance(p.get('memory_bytes'), int) and p['memory_bytes'] >= 0: entry['memory_bytes'] = p['memory_bytes']
             processes.append(entry)
+        target = value.get('target_process')
+        if target is not None:
+            assert isinstance(target, dict) and type(target['pid']) is int and target['pid'] > 0
+            assert target['status'] in ('present', 'missing', 'unavailable')
+            if target['status'] == 'present':
+                proc = target['process']
+                assert proc['pid'] == target['pid']
+                # Reuse the same bounded process parser for the independent lookup.
+                target['process'] = parse_snapshot(json.dumps({**value, 'processes':[proc], 'target_process':None}).encode())['processes'][0]
+            else: target['process'] = None
         return {'observed_at': observed_at(), 'system': value['system'], 'processes': processes,
-                'capabilities': value['capabilities'], 'warnings': [str(w)[:512] for w in value['warnings'][:32]]}
+                'target_process': target, 'capabilities': value['capabilities'], 'warnings': [str(w)[:512] for w in value['warnings'][:32]]}
     except (ValueError, TypeError, KeyError, AssertionError):
         fail('collector_invalid', 'Remote collector returned invalid data', 503)
 
 
-def collect_snapshot(client):
+def collect_snapshot(client, *, pid=None, query=None):
+    if pid is not None and (type(pid) is not int or not 0 < pid <= 2147483647):
+        fail('invalid_pid', 'PID must be a positive integer', 422)
+    if query is not None and (not isinstance(query, str) or len(query) > 128 or any(ord(c) < 32 for c in query)):
+        fail('invalid_query', 'Process query must be at most 128 characters without controls', 422)
     channel = client.get_transport().open_session(timeout=CONNECT_TIMEOUT)
     deadline = time.monotonic() + COLLECTOR_TIMEOUT
     output = bytearray()
@@ -113,7 +165,7 @@ def collect_snapshot(client):
     try:
         channel.settimeout(CONNECT_TIMEOUT)
         with remote_deadline(client):
-            channel.exec_command('python3 -c ' + shlex.quote(COLLECTOR_SCRIPT))
+            channel.exec_command('python3 -c ' + shlex.quote(COLLECTOR_SCRIPT) + ' ' + shlex.quote(json.dumps({'pid': pid, 'query': query})))
         while True:
             if time.monotonic() >= deadline:
                 fail('collector_timeout', 'Remote observation timed out', 503)

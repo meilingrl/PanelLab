@@ -1,6 +1,6 @@
 """Owner-scoped trusted remote workspace endpoints."""
 from typing import Annotated
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User
@@ -38,10 +38,10 @@ def check(server_id: int, db: DB, user: Owner):
 
 
 @router.get('/servers/{server_id}/snapshot')
-def snapshot(server_id: int, db: DB, user: Owner):
+def snapshot(server_id: int, db: DB, user: Owner, pid: int | None = Query(None, ge=1, le=2147483647), query: str | None = Query(None, max_length=128)):
     from services.remote_probe import collect_snapshot
     with connection.open_remote(db, user, server_id) as client:
-        return collect_snapshot(client)
+        return collect_snapshot(client, pid=pid, query=query)
 
 
 @router.get('/servers/{server_id}/files')
