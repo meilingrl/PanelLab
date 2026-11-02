@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, onBeforeUnmount, computed } from 'vue'
 import { workspaceApi as api, formatBytes, formatTime, statusLabels } from '../../composables/useWorkspaceApi'
+import { taskBinding } from '../../composables/workspaceBinding'
 const props=defineProps({task:{type:Object,required:true}})
 const observation=ref(null),error=ref(''),busy=ref(false),loadedAt=ref(0),clock=ref(Date.now())
 let seq=0,controller
@@ -12,7 +13,7 @@ async function refresh(){
  catch(e){if(n===seq&&e.name!=='AbortError')error.value=e.message}
  finally{if(n===seq)busy.value=false}
 }
-watch(()=>props.task.id,()=>{observation.value=null;loadedAt.value=0;refresh()},{immediate:true})
+watch(()=>taskBinding(props.task),()=>{observation.value=null;loadedAt.value=0;refresh()},{immediate:true})
 onBeforeUnmount(()=>{seq++;controller?.abort();clearInterval(timer)})
 </script>
 <template>

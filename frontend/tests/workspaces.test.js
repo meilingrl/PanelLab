@@ -86,7 +86,7 @@ it('labels reported runs and opens the proper terminal directory, unregisters on
  await w.get('[data-testid="tab-runs"]').trigger('click');await flushPromises()
  expect(w.text()).toContain('上报记录');expect(w.text()).toContain('operator says complete')
  await w.get('[data-testid="open-terminal"]').trigger('click');await flushPromises()
- expect(createSession).toHaveBeenCalledWith(server,{cwd:task.root_path});expect(push).toHaveBeenCalledWith('/terminal')
+ expect(createSession).toHaveBeenCalledWith(server,{cwd:task.root_path,signal:expect.any(AbortSignal)});expect(push).toHaveBeenCalledWith('/terminal')
  await w.get('[data-testid="delete-task"]').trigger('click');await flushPromises()
  expect(w.text()).toContain('远程进程和文件保持不变')
  expect(fetch.mock.calls.some(([,o])=>o.method==='DELETE')).toBe(false)

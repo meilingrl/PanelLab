@@ -2,10 +2,11 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { workspaceApi as api,formatBytes } from '../../composables/useWorkspaceApi'
 import LogViewer from './LogViewer.vue'
+import { taskBinding } from '../../composables/workspaceBinding'
 const props=defineProps({task:{type:Object,required:true}})
 const emit=defineEmits(['directory'])
 const listing=ref(null),error=ref(''),busy=ref(false),downloading=ref(null),textPath=ref(null),stale=ref(false)
-let seq=0,controller,alive=true
+let seq=0,generation=0,controller,downloadController
 const crumbs=computed(()=>{
  const cwd=listing.value?.cwd||props.task.root_path,root=props.task.root_path
  const suffix=cwd.slice(root==='/'?0:root.length).split('/').filter(Boolean)
@@ -19,11 +20,11 @@ async function load(path){
 }
 async function download(entry){
  if(downloading.value)return
- const id=props.task.id;downloading.value=entry.path;error.value=''
- try{const blob=await api.download(id,entry.path);if(!alive||props.task.id!==id)return;const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=entry.name;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}catch(e){if(alive&&props.task.id===id)error.value=e.message}finally{if(alive&&props.task.id===id)downloading.value=null}
+ const n=generation;downloadController=new AbortController();downloading.value=entry.path;error.value=''
+ try{const blob=await api.download(props.task.id,entry.path,downloadController.signal);if(n!==generation)return;const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=entry.name;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}catch(e){if(n===generation&&e.name!=='AbortError')error.value=e.message}finally{if(n===generation){downloading.value=null;downloadController=null}}
 }
-watch(()=>props.task.id,()=>{listing.value=null;textPath.value=null;downloading.value=null;load()},{immediate:true})
-onBeforeUnmount(()=>{alive=false;seq++;controller?.abort()})
+watch(()=>taskBinding(props.task),()=>{generation++;downloadController?.abort();listing.value=null;textPath.value=null;downloading.value=null;stale.value=false;load()},{immediate:true})
+onBeforeUnmount(()=>{generation++;seq++;controller?.abort();downloadController?.abort()})
 </script>
 <template>
  <section aria-label="任务文件"><div class="ws-row"><h3>任务文件</h3><button :disabled="busy" @click="load(listing?.cwd)">{{ busy?'读取中…':'刷新目录' }}</button></div><p class="ws-muted">仅浏览任务根目录内的普通目录和文件。下载上限 16 MiB。</p>

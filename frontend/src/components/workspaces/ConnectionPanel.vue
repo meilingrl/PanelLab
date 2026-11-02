@@ -1,14 +1,16 @@
 <script setup>
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { workspaceApi as api, formatTime } from '../../composables/useWorkspaceApi'
+import { serverBinding } from '../../composables/workspaceBinding'
 const props=defineProps({server:{type:Object,required:true},initialAuthMode:String})
 const emit=defineEmits(['connected'])
 const info=ref(null),probe=ref(null),error=ref(''),busy=ref(false),checked=ref(null),authMode=ref('password')
 const modeChanged=computed(()=>!!info.value?.pinned&&authMode.value!==info.value.auth_mode)
 let generation=0,controller
-watch(()=>props.server.id,async id=>{
+watch(()=>serverBinding(props.server),async ()=>{
+  const id=props.server.id
   const seq=++generation;controller?.abort();controller=new AbortController()
-  info.value=null;probe.value=null;checked.value=null;error.value='';busy.value=false
+  info.value=null;probe.value=null;checked.value=null;error.value='';busy.value=false;authMode.value=props.initialAuthMode||'password'
   try {const result=await api.connection(id,controller.signal);if(seq===generation){info.value=result;authMode.value=result.auth_mode||props.initialAuthMode||'password'}}
   catch(e){if(seq===generation&&e.name!=='AbortError')error.value=e.message}
 },{immediate:true})
