@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User
-from routers.auth import get_current_user
-from schemas.remote import ProbeRequest, TrustRequest
+from routers.auth import get_current_user, require_operator
+from schemas.remote import ProbeRequest, TrustRequest, TerminalTicketRequest
 from services import remote_connection as connection
 
 router = APIRouter(prefix='/api', tags=['remote'])
@@ -31,9 +31,9 @@ def summary(server_id: int, db: DB, user: Owner):
 @router.post('/servers/{server_id}/connection/check')
 def check(server_id: int, db: DB, user: Owner):
     with connection.open_remote(db, user, server_id) as client:
-        with client.open_sftp() as sftp:
-            sftp.get_channel().settimeout(connection.CONNECT_TIMEOUT)
-            home = sftp.normalize('.')
+        from services.remote_files import open_sftp, safe_path
+        with open_sftp(client) as sftp:
+            home = safe_path(sftp)
     return {'ok': True, 'home': home, 'observed_at': connection.observed_at()}
 
 
@@ -50,3 +50,15 @@ def files(server_id: int, db: DB, user: Owner, path: str | None = None):
     with connection.open_remote(db, user, server_id) as client:
         with open_sftp(client) as sftp:
             return list_directory(sftp, path)
+
+
+@router.post('/servers/{server_id}/terminal-ticket')
+def terminal_ticket(server_id: int, body: TerminalTicketRequest, db: DB, user: Owner):
+    from services.remote_tickets import issue_ticket
+    return issue_ticket(db, user, server_id, body.cwd)
+
+
+@router.get('/remote/tailscale')
+def tailscale(user: Annotated[User, Depends(require_operator)]):
+    from services.remote_discovery import discover_tailscale
+    return discover_tailscale()

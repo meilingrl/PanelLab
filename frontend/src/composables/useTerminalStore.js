@@ -25,10 +25,19 @@ export function useTerminalStore() {
     return sessions.value.find((s) => s.id === id) || null
   })
 
-  function createSession(server) {
+  async function createSession(server, options = {}) {
     const token = localStorage.getItem('panel_token')
     if (!token) {
       return Promise.reject(new Error('未登录'))
+    }
+    const response = await fetch(`/api/servers/${server.id}/terminal-ticket`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: options.cwd ?? null }),
+    })
+    const payload = await response.json()
+    if (!response.ok) {
+      throw new Error(payload.detail?.message || payload.detail || '无法获取终端票据')
     }
     const id = crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const session = {
@@ -44,7 +53,7 @@ export function useTerminalStore() {
     currentSessionId.value = id
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/api/ws/terminal?token=${encodeURIComponent(token)}&server_id=${server.id}`
+    const wsUrl = `${protocol}//${window.location.host}/api/ws/terminal?ticket=${encodeURIComponent(payload.ticket)}&server_id=${server.id}`
 
     return new Promise((resolve, reject) => {
       let resolved = false

@@ -3,6 +3,7 @@ import base64
 import hashlib
 import socket
 import time
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -80,10 +81,11 @@ def trust(db, user, server_id, token):
     row = owned_server(db, user, server_id)
     try:
         p = jwt.decode(token, get_settings().secret_key, algorithms=['HS256'], options={'require': ['exp']})
-        assert p['purpose'] == 'remote-trust' and p['owner'] == user.id and p['server'] == row.id
-        assert all(p[k] == v for k, v in target(row).items())
-        assert p['auth_mode'] in ('password', 'tailscale')
-        assert p['key_type'] and p['key_data'] and p['fingerprint']
+        if not (p['purpose'] == 'remote-trust' and p['owner'] == user.id and p['server'] == row.id
+                and all(p[k] == v for k, v in target(row).items())
+                and p['auth_mode'] in ('password', 'tailscale')
+                and p['key_type'] and p['key_data'] and p['fingerprint']):
+            raise ValueError('Invalid trust binding')
     except Exception:
         fail('invalid_trust_token', 'Trust confirmation expired or target changed; probe again')
     pin = db.get(RemoteConnection, row.id)
@@ -141,3 +143,22 @@ def open_remote(db, user, server_id):
             yield client
         finally:
             client.close()
+
+
+@contextmanager
+def remote_deadline(client, timeout=CONNECT_TIMEOUT):
+    """Close stalled protocol requests, including Paramiko's unbounded event waits."""
+    expired = threading.Event()
+    transport = client.get_transport()
+    def abort():
+        expired.set()
+        transport.close()
+    timer = threading.Timer(timeout, abort)
+    timer.daemon = True
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.cancel()
+        if expired.is_set():
+            fail('remote_timeout', 'Remote operation timed out', 503)

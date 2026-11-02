@@ -2,7 +2,7 @@
 import json
 import shlex
 import time
-from services.remote_connection import CONNECT_TIMEOUT, fail, observed_at
+from services.remote_connection import CONNECT_TIMEOUT, fail, observed_at, remote_deadline
 
 COLLECTOR_TIMEOUT = 20
 OUTPUT_LIMIT = 1024 * 1024
@@ -112,7 +112,8 @@ def collect_snapshot(client):
     total = 0
     try:
         channel.settimeout(CONNECT_TIMEOUT)
-        channel.exec_command('python3 -c ' + shlex.quote(COLLECTOR_SCRIPT))
+        with remote_deadline(client):
+            channel.exec_command('python3 -c ' + shlex.quote(COLLECTOR_SCRIPT))
         while True:
             if time.monotonic() >= deadline:
                 fail('collector_timeout', 'Remote observation timed out', 503)

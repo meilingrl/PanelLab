@@ -104,3 +104,19 @@ def test_malformed_snapshot_and_bounded_processes():
     result = parse_snapshot(json.dumps(payload).encode())
     assert len(result['processes']) == 200
     assert len(result['processes'][0]['command']) == 512
+
+
+def test_tailscale_discovery_bounded_subprocess(monkeypatch):
+    import subprocess, sys
+    from services import remote_discovery as rd
+    monkeypatch.setattr(rd.shutil, 'which', lambda name: '/fixture/tailscale')
+    real_popen = subprocess.Popen
+    def run_fixture(source):
+        monkeypatch.setattr(rd.subprocess, 'Popen', lambda args, **kw: real_popen([sys.executable, '-c', source], **kw))
+        return rd.discover_tailscale()
+    result = run_fixture('import json; print(json.dumps({"BackendState":"Running","Peer":{"id":{"HostName":"lab","DNSName":"lab.example.","TailscaleIPs":["100.64.0.1"],"Online":True}}}))')
+    assert result['available'] is True
+    assert result['devices'] == [{'name':'lab','dns_name':'lab.example.','addresses':['100.64.0.1'],'online':True}]
+    assert run_fixture('print("bad-json")')['available'] is False
+    assert run_fixture('raise SystemExit(2)')['available'] is False
+    assert run_fixture('print("x" * 600000)')['available'] is False

@@ -113,3 +113,83 @@ def test_tailscale_explicit_none_and_errors_sanitized(remote, network, monkeypat
     result = remote.post('/api/servers/71/connection/check')
     assert result.status_code == 503
     assert 'PRIVATE_PASSWORD' not in result.text
+
+
+def test_ticket_requires_pin_owner_and_single_use(remote, network):
+    assert remote.post('/api/servers/71/terminal-ticket', json={}).status_code == 409
+    assert remote.post('/api/servers/72/terminal-ticket', json={}).status_code == 404
+    pin(remote)
+    from services.remote_tickets import consume_ticket
+    result = remote.post('/api/servers/71/terminal-ticket', json={'cwd': '/home/runner/中文 space'})
+    assert result.status_code == 200
+    ticket = result.json()['ticket']
+    with SessionLocal() as db:
+        user, sid, cwd = consume_ticket(db, ticket, 71)
+        assert user.id == 1 and sid == 71 and cwd == '/home/runner/中文 space'
+        with pytest.raises(Exception) as exc: consume_ticket(db, ticket, 71)
+        assert exc.value.status_code == 401
+    for cwd in ('relative', '/home/a\nwhoami', '/home/a\0bad'):
+        assert remote.post('/api/servers/71/terminal-ticket', json={'cwd': cwd}).status_code == 400
+
+
+def test_ticket_expiry_target_change_and_cross_server(remote, network, monkeypatch):
+    from services import remote_tickets as rt
+    pin(remote)
+    ticket = remote.post('/api/servers/71/terminal-ticket', json={}).json()['ticket']
+    with SessionLocal() as db:
+        with pytest.raises(Exception) as exc: rt.consume_ticket(db, ticket, 72)
+        assert exc.value.status_code == 401
+    ticket = remote.post('/api/servers/71/terminal-ticket', json={}).json()['ticket']
+    now = time.time()
+    monkeypatch.setattr(rt.time, 'time', lambda: now + 61)
+    with SessionLocal() as db:
+        with pytest.raises(Exception) as exc: rt.consume_ticket(db, ticket, 71)
+        assert exc.value.status_code == 401
+    monkeypatch.undo()
+    ticket = remote.post('/api/servers/71/terminal-ticket', json={}).json()['ticket']
+    with SessionLocal() as db:
+        db.get(Server, 71).host = 'other.invalid'
+        db.commit()
+        with pytest.raises(Exception) as exc: rt.consume_ticket(db, ticket, 71)
+        assert exc.value.status_code == 409
+
+
+def test_ws_rejects_long_jwt_and_invalid_ticket(remote):
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect):
+        with remote.websocket_connect('/api/ws/terminal?token=' + _create_token('admin') + '&server_id=71'): pass
+    with remote.websocket_connect('/api/ws/terminal?ticket=invalid&server_id=71') as ws:
+        assert 'ticket' in ws.receive_text().lower()
+        with pytest.raises(WebSocketDisconnect): ws.receive_text()
+
+
+def test_tailscale_absent_and_production_operator(remote, monkeypatch):
+    from services import remote_discovery as discovery
+    monkeypatch.setattr(discovery.shutil, 'which', lambda name: None)
+    result = remote.get('/api/remote/tailscale')
+    assert result.status_code == 200
+    assert result.json() == {'available': False, 'reason': 'Tailscale CLI is not installed', 'devices': []}
+    monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('ENABLE_DEMO_AUTH', '0')
+    monkeypatch.setenv('NGINX_SKIP_APPLY', '0')
+    monkeypatch.setenv('INIT_ADMIN_PASSWORD', 'fixture-secure-password')
+    remote.headers['Authorization'] = 'Bearer ' + _create_token('other')
+    assert remote.get('/api/remote/tailscale').status_code == 403
+
+
+def test_channel_setup_deadline_closes_transport():
+    import threading
+    from services.remote_connection import remote_deadline
+    closed = threading.Event()
+    client = SimpleNamespace(get_transport=lambda: SimpleNamespace(close=closed.set))
+    with pytest.raises(Exception) as exc:
+        with remote_deadline(client, timeout=0.02):
+            assert closed.wait(0.5)
+    assert exc.value.detail['code'] == 'remote_timeout'
+
+
+def test_all_remote_reads_hide_other_owners(remote):
+    for path in ('connection', 'snapshot', 'files'):
+        assert remote.get(f'/api/servers/72/{path}').status_code == 404
+    for path in ('connection/check', 'terminal-ticket'):
+        assert remote.post(f'/api/servers/72/{path}', json={}).status_code == 404

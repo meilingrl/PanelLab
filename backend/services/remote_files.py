@@ -7,14 +7,15 @@ import posixpath
 import stat
 import time
 from contextlib import contextmanager
-from services.remote_connection import CONNECT_TIMEOUT, fail
+from services.remote_connection import CONNECT_TIMEOUT, fail, remote_deadline
 
 
 @contextmanager
 def open_sftp(client):
-    with client.open_sftp() as sftp:
-        sftp.get_channel().settimeout(CONNECT_TIMEOUT)
-        yield sftp
+    with remote_deadline(client):
+        with client.open_sftp() as sftp:
+            sftp.get_channel().settimeout(CONNECT_TIMEOUT)
+            yield sftp
 
 
 def safe_path(sftp, path=None, *, root=None, kind='directory'):
