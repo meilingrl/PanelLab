@@ -17,6 +17,8 @@ Tailscale 提供网络和身份基础设施，PanelLab 提供任务语义、现�
 - https://tailscale.com/docs/reference/tailscale-cli
 - https://tailscale.com/docs/reference/tailscale-api
 
+进一步核验发现 Tailscale Aperture 已提供连接机器后让 Agent 执行命令的 Chat 体验及 MCP 代理，因此 AI 运维入口已有实质重合。PanelLab 的候选差异在于无需聊天即可直接操作的训练/任务工作现场及跨 Agent 的持久对象；这是待试用验证的产品假设，不宣称独有。来源：https://tailscale.com/docs/aperture/what-is-aperture 与 https://tailscale.com/docs/aperture/mcp-server 。本轮不建设 LLM 网关或另一套聊天 Agent。
+
 借鉴：同一核心提供 GUI 与机器接口；稳定 ID、结构化状态、明确的权限边界。Agent 与人使用同一账号权限，本轮不宣称细粒度 Agent 委派权限。
 
 ## 连接与观察

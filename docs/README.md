@@ -1,6 +1,8 @@
 # PanelLab 文档索引
 
-本轮入口：[站点变更设计](design/design-safe-site-changes.md) · [实施计划](design/plan-safe-site-changes.md) · [改进与验证记录](project/production-readiness-20261102.md)。
+本轮入口：[远程任务工作台设计](design/design-remote-workspace.md) · [实施计划](design/plan-remote-workspace.md)。
+
+上一轮入口：[站点变更设计](design/design-safe-site-changes.md) · [实施计划](design/plan-safe-site-changes.md) · [改进与验证记录](project/production-readiness-20261102.md)。
 
 本目录存放需求、设计与实施说明。**局部项目规划**统一采用「Plan」格式（需求与设计合一），便于迭代与协作。
 
