@@ -92,6 +92,9 @@ def delete_server(
     )
     if not row:
         raise HTTPException(status_code=404, detail="服务器不存在")
+    from models.workload import Workload
+    if db.query(Workload.id).filter(Workload.server_id == row.id).first():
+        raise HTTPException(409, detail={"code":"server_has_workloads","message":"Remove or rebind workloads before deleting this server"})
     db.delete(row)
     db.commit()
     return {"message": "服务器已删除"}
