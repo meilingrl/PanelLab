@@ -1,4 +1,4 @@
-# PanelLab CI：后端 pytest + 前端 build
+# PanelLab CI：后端 pytest + 前端组件测试/build
 name: CI
 
 on:
@@ -47,6 +47,11 @@ jobs:
         run: |
           cd frontend
           npm ci
+
+      - name: Run frontend tests
+        run: |
+          cd frontend
+          npm test
 
       - name: Build frontend
         run: |
