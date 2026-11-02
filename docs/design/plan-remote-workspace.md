@@ -9,7 +9,7 @@
 
 ## Global Constraints
 
-- Work only on feat/remote-workspace in /Users/meilingluo/Developer/Projects/PanelLab/worktrees/reliability. Preserve previous branch and main. Small commits, stage owned files only. No push/merge/deploy or real-server/tailnet operations.
+- Work only on feat/remote-workspace in /Users/meilingluo/Developer/Projects/PanelLab/worktrees/reliability. Preserve previous branch and main. Small commits, stage owned files only. No merge/deploy or real-server/tailnet operations. Implementers do not push; controller may back up only this new feature branch after final review under the user's autonomous Git-management authorization.
 - Use only isolated fixtures. Never read personal SSH config/keys, never use host SSH agent implicitly. Password and explicit Tailscale none authentication only. Host keys must be explicitly pinned before credentials or remote work.
 - All endpoints enforce ownership; production shared-machine device discovery requires operator. No new arbitrary remote execution endpoint. Workload mutations modify metadata only. UI and CLI use same API.
 - Remote reads bounded: SSH connect/auth/channel deadline10s, collector20s/output1MiB, browse500entries, text/log64KiB, download16MiB. No symlink/special-file traversal in workspace file reads. Return clear errors, no credential/raw exception leaks.
@@ -92,5 +92,5 @@ expect(createRequest.root_path).toBe('/home/lab/experiments/run A')
 
 - [x] Run isolated local SSH/SFTP server with knownhostkey and fixtureprocess/files; exercise trust,mismatch,discovery,pinning,logtail,download,CLIshareddata; preserve originalserver state.
 - [x] Browser actual create/selecttask,log/files/download andnarrowviewport; screenshot. Backendandfrontendfinalchecks afterlastcodechange.
-- [ ] Independentwholebranchreview; onefixwave ifneeded; updatedREADME/docsindex/manual anddateddeliveryreport distinguish implemented/verified/deferred. KeepTailscalerealnetworkuntested explicit.
-- [ ] Clean gitstatus, document localbranch relationship and unchangedmain. Stop onlyselfcreatedtestservices. Keep worktree/reviewevidence; no unapprovedremotechanges.
+- [x] Independentwholebranchreview; onefixwave ifneeded; updatedREADME/docsindex/manual anddateddeliveryreport distinguish implemented/verified/deferred. KeepTailscalerealnetworkuntested explicit.
+- [x] Clean gitstatus, document localbranch relationship and unchangedmain. Stop onlyselfcreatedtestservices. Keep worktree/reviewevidence; only authorized new-feature-branch backup; no main merge/deployment.
