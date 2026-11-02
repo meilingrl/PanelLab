@@ -56,3 +56,42 @@ def test_delete_failure_restores_bytes(manager, tmp_path):
     script(manager, tmp_path, 'test_fail')
     assert manager.apply_change('web.conf', None).status == 'failed_restored'
     assert target.read_bytes() == b'original'
+
+def test_restore_write_failure_is_explicit(manager,tmp_path):
+    conf=tmp_path/'conf';conf.mkdir();target=conf/'web.conf';target.write_text('original')
+    p=tmp_path/'deny_restore.py'
+    p.write_text("import pathlib,sys\np=pathlib.Path(sys.argv[1]);p.chmod(0o500);sys.exit(1)\n")
+    manager.settings.nginx_test_cmd=f'{shlex.quote(sys.executable)} {shlex.quote(str(p))} {shlex.quote(str(conf))}'
+    try:
+        result=manager.apply_change('web.conf','candidate')
+        assert result.status=='recovery_failed'
+        assert target.read_text()=='candidate'
+        assert result.steps[-1]['name']=='restore' and result.steps[-1]['status']=='failed'
+    finally: conf.chmod(0o700)
+
+def test_directory_size_limit_and_target_symlink(manager,tmp_path):
+    conf=tmp_path/'conf';conf.mkdir();target=conf/'web.conf'
+    target.write_bytes(b'x'*(1024*1024+1))
+    with pytest.raises(NginxManagerError): manager.fingerprint()
+    target.unlink(); outside=tmp_path/'outside';outside.write_text('private');target.symlink_to(outside)
+    with pytest.raises(NginxManagerError): manager.apply_change('web.conf','candidate')
+    assert outside.read_text()=='private'
+
+def test_file_lock_excludes_other_process(manager,tmp_path):
+    import subprocess,time
+    # Independent process shares no Python lock; flock must protect the whole transaction.
+    p=tmp_path/'holder.py'
+    p.write_text("from services.nginx_manager import NginxManager\nfrom pathlib import Path\nimport sys,time\nwith NginxManager().change_lock():\n Path(sys.argv[1]).write_text('locked')\n time.sleep(0.4)\n")
+    marker=tmp_path/'locked'
+    import os
+    child=subprocess.Popen([sys.executable,str(p),str(marker)],env=os.environ | {'PYTHONPATH':os.getcwd()})
+    try:
+        deadline=time.monotonic()+5
+        while not marker.exists() and time.monotonic()<deadline: time.sleep(.01)
+        assert marker.exists()
+        started=time.monotonic()
+        with manager.change_lock():
+            assert time.monotonic()-started > .2
+        assert child.wait(timeout=3)==0
+    finally:
+        if child.poll() is None: child.kill(); child.wait()

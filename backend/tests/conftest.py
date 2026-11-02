@@ -7,6 +7,7 @@ _test_db = os.path.join(os.path.dirname(__file__), "test.db")
 os.environ["DATABASE_URL"] = f"sqlite:///{_test_db}"
 os.environ["NGINX_SKIP_APPLY"] = "1"
 os.environ["APP_ENV"] = "test"
+os.environ["SECRET_KEY"] = "test-only-secret-at-least-thirty-two-characters"
 os.environ["ENABLE_DEMO_AUTH"] = "1"
 
 import pytest
@@ -17,7 +18,7 @@ from main import app
 from fastapi.testclient import TestClient
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def db_setup():
     engine.dispose()
     if os.path.exists(_test_db):
@@ -46,5 +47,6 @@ def db_setup():
 
 
 @pytest.fixture
-def client(db_setup):
+def client(db_setup, tmp_path, monkeypatch):
+    monkeypatch.setenv("NGINX_CONF_DIR", str(tmp_path / "conf"))
     return TestClient(app)

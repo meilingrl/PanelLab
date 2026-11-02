@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base
 from models import MonitorRemoteConfig, Server, SiteConfig, User, Feedback  # 确保所有模型注册，create_all 会建齐表
-from routers import auth, db_admin, docs, feedback, monitor, sites, terminal, servers
+from routers import auth, db_admin, docs, feedback, monitor, sites, site_changes, terminal, servers
 
 # 建表（不插入数据，初始用户请运行 python -m init_db）
 @asynccontextmanager
@@ -31,6 +31,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(monitor.router)
 app.include_router(sites.router)
+app.include_router(site_changes.router)
 app.include_router(db_admin.router)
 app.include_router(terminal.router)
 app.include_router(docs.router)
