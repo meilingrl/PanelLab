@@ -44,7 +44,7 @@ def test_directory_cap():
 def test_proc_stat_parser_identity_and_no_gpu(tmp_path):
     from services.remote_probe import COLLECTOR_SCRIPT, parse_snapshot
     # Execute the same fixed program with /proc fixture adapters, not source assertions.
-    files = {'/proc/sys/kernel/random/boot_id': 'boot-fixture', '/proc/meminfo': 'MemTotal: 1000 kB\nMemAvailable: 400 kB\n',
+    files = {'/proc/self/mountinfo': '25 1 0:5 / /proc rw - proc proc rw\n', '/proc/sys/kernel/random/boot_id': 'boot-fixture', '/proc/meminfo': 'MemTotal: 1000 kB\nMemAvailable: 400 kB\n',
              '/proc/loadavg': '0.10 0.20 0.30 1/20 42', '/proc/net/dev': 'header\nheader\n eth0: 123 0 0 0 0 0 0 0 456 0 0 0 0 0 0 0\n',
              '/proc/42/stat': '42 (worker ) name) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 9876 20 21',
              '/proc/42/cmdline': b'python\x00train.py\x00', '/proc/42/status': 'VmRSS:\t20 kB\n'}
@@ -159,3 +159,38 @@ def test_process_state_survives_parser():
     from services.remote_probe import parse_snapshot
     payload = {'system':{'cpu':None,'memory':None,'network':None,'gpu':None},'processes':[{'pid':42,'identity':'boot:2','command':'train','state':'Z'}],'capabilities':{},'warnings':[]}
     assert parse_snapshot(json.dumps(payload).encode())['processes'][0]['state'] == 'Z'
+
+
+@pytest.mark.parametrize(('mountinfo','expected'),[
+    ('25 1 0:5 / /proc rw,nosuid,nodev,noexec - proc proc rw\n','missing'),
+    ('25 1 0:5 / /proc rw - proc proc rw,hidepid=0\n','missing'),
+    ('25 1 0:5 / /proc rw - proc proc rw,hidepid=2\n','unavailable'),
+    ('25 1 0:5 / /proc rw - proc proc rw,hidepid=invisible\n','unavailable'),
+    (None,'unavailable'),
+    ('malformed mountinfo\n','unavailable'),
+])
+def test_concealed_pid_enoent_does_not_prove_exit(monkeypatch,mountinfo,expected):
+    import builtins, errno, io, os, subprocess, sys
+    from contextlib import nullcontext, redirect_stdout
+    from services.remote_probe import COLLECTOR_SCRIPT, parse_snapshot
+    def fake_open(path,mode='r',*args,**kwargs):
+        if path == '/proc/sys/kernel/random/boot_id': return io.StringIO('boot')
+        if path == '/proc/self/mountinfo':
+            if mountinfo is None: raise PermissionError(errno.EACCES,'denied')
+            return io.StringIO(mountinfo)
+        raise FileNotFoundError(errno.ENOENT,'concealed or missing')
+    monkeypatch.setattr(builtins,'open',fake_open)
+    monkeypatch.setattr(os,'scandir',lambda path:nullcontext(iter([])))
+    monkeypatch.setattr(subprocess,'run',lambda *a,**k:(_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(sys,'argv',['-c',json.dumps({'pid':9999})])
+    output = io.StringIO()
+    with redirect_stdout(output): exec(compile(COLLECTOR_SCRIPT,'<collector>','exec'),{})
+    result = parse_snapshot(output.getvalue().encode())
+    assert result['target_process']['status'] == expected
+    assert result['target_process']['process'] is None
+    from services import remote_connection, remote_probe, workloads
+    monkeypatch.setattr(remote_connection, 'open_remote', lambda *args: nullcontext(object()))
+    monkeypatch.setattr(remote_probe, 'collect_snapshot', lambda *args, **kwargs: result)
+    workload = SimpleNamespace(id=1, server_id=71, pid=9999, process_identity='boot:2345', log_path=None)
+    observed = workloads.observation(None, None, workload)
+    assert observed['process_status'] == ('exited_or_missing' if expected == 'missing' else 'unknown')

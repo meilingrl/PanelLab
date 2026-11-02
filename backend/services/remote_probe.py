@@ -43,12 +43,36 @@ try:
     result['system']['network'] = network[:200]
 except (OSError, ValueError, IndexError):
     result['warnings'].append('Network counters unavailable')
+def absence_verifiable():
+    # ENOENT is ambiguous on hidepid procfs. Read the collector's own mount
+    # namespace, conservatively refusing absence claims for unknown/truncated
+    # metadata, non-proc/partial mounts, or any restricted hidepid mode.
+    try:
+        mountinfo = text('/proc/self/mountinfo', 65537)
+        if len(mountinfo) > 65536: return False
+        matches = []
+        for line in mountinfo.splitlines():
+            left, separator, right = line.partition(' - ')
+            fields, filesystem = left.split(), right.split()
+            if len(fields) < 6 or fields[4] != '/proc': continue
+            if not separator or len(filesystem) < 3 or filesystem[0] != 'proc' or fields[3] != '/': return False
+            options = fields[5].split(',') + filesystem[2].split(',')
+            matches.append(all(option in ('hidepid=0', 'hidepid=off') for option in options if option.startswith('hidepid=')))
+        return len(matches) == 1 and matches[0]
+    except (OSError, ValueError): return False
+
+can_confirm_absence = absence_verifiable()
+result['capabilities']['process_absence_verifiable'] = can_confirm_absence
+if not can_confirm_absence:
+    result['warnings'].append('Process visibility is restricted or unknown; missing PIDs are inconclusive')
+
 def process(pid, boot):
     base = '/proc/' + str(pid)
-    # Only an absent stat proves a missing PID. Permission/read/identity races
-    # remain unavailable, independent of the capped discovery list.
+    # Absence is evidence only on verified unrestricted procfs. Permission,
+    # hidden PID, read and identity races remain unavailable.
     try: fields = text(base + '/stat').rsplit(')', 1)[1].split()
-    except FileNotFoundError: return {'pid': pid, 'status': 'missing', 'process': None}
+    except FileNotFoundError:
+        return {'pid': pid, 'status': 'missing' if can_confirm_absence else 'unavailable', 'process': None}
     identity = boot + ':' + fields[19]
     with open(base + '/cmdline', 'rb') as f:
         command = f.read(2048).replace(b'\0', b' ').decode('utf-8', errors='replace').strip()[:512]
@@ -76,7 +100,7 @@ if target_pid is not None:
 try:
     if not boot: raise ValueError()
     truncated = False
-    incomplete = False
+    incomplete = not can_confirm_absence
     with os.scandir('/proc') as entries:
         for index, item in enumerate(entries):
             if index >= 4096:
