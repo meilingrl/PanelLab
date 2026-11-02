@@ -470,3 +470,93 @@ it("ignores a delayed initial site list after execution has refreshed the list",
   await flushPromises();
   expect(wrapper.get('[aria-label="站点列表"]').text()).toContain("fresh-site");
 });
+
+it.each([true, false])(
+  "keeps loaded history pages after execute fails and preserves pagination (has more: %s)",
+  async (morePages) => {
+    let historyReads = 0;
+    const oldestId = morePages ? 1 : 14;
+    setup((url) => {
+      if (url.endsWith("/execute")) {
+        return response(
+          {
+            detail: {
+              message: "需人工核查",
+              change_id: 41,
+              status: "manual_review_required",
+            },
+          },
+          503,
+        );
+      }
+      if (!url.startsWith("/api/site-changes?")) return undefined;
+      historyReads++;
+      if (historyReads === 1)
+        return response({
+          items: Array.from({ length: 20 }, (_, i) => ({
+            ...change,
+            id: 40 - i,
+          })),
+        });
+      if (historyReads === 2)
+        return response({
+          items: Array.from({ length: morePages ? 20 : 7 }, (_, i) => ({
+            ...change,
+            id: 20 - i,
+            site_name: "older-evidence",
+          })),
+        });
+      if (historyReads === 3)
+        return response({
+          items: Array.from({ length: 20 }, (_, i) => ({
+            ...change,
+            id: 41 - i,
+            status: "recovery_failed",
+            message: "最新核查结果",
+          })),
+        });
+      return response({ items: [] });
+    });
+    await flushPromises();
+    await button("加载下一页").trigger("click");
+    await flushPromises();
+    // The user opened older evidence before trying another operation.
+    await wrapper
+      .get(`[data-change-id="${oldestId}"] summary`)
+      .trigger("click");
+    wrapper.get(`[data-change-id="${oldestId}"] details`).element.open = true;
+    await button("删除").trigger("click");
+    await flushPromises();
+    await button("确认执行变更").trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("需人工核查");
+    expect(wrapper.get('[aria-label="变更历史"]').text()).toContain(
+      "older-evidence",
+    );
+    expect(
+      wrapper.get(`[data-change-id="${oldestId}"] details`).element.open,
+    ).toBe(true);
+    const ids = wrapper
+      .findAll("[data-change-id]")
+      .map((row) => Number(row.attributes("data-change-id")));
+    expect(ids).toEqual(
+      Array.from({ length: 42 - oldestId }, (_, i) => 41 - i),
+    );
+    expect(wrapper.get('[data-change-id="30"]').text()).toContain(
+      "最新核查结果",
+    );
+    expect(wrapper.get('[data-change-id="30"]').text()).toContain("恢复失败");
+    expect(calls("/execute")).toHaveLength(1);
+    if (morePages) {
+      await button("加载下一页").trigger("click");
+      await flushPromises();
+      expect(requests.at(-1).url).toBe(
+        "/api/site-changes?limit=20&before_id=1",
+      );
+    } else {
+      expect(
+        wrapper.findAll("button").some((b) => b.text() === "加载下一页"),
+      ).toBe(false);
+    }
+  },
+);

@@ -132,11 +132,12 @@ async function fetchSites() {
     if (!disposed && current === sitesRevision) loading.value = false;
   }
 }
-function fetchHistory(append = false) {
+function fetchHistory(append = false, preserveLoaded = false) {
   if (historyTask) return historyTask;
   historyLoading.value = true;
   historyError.value = "";
   const cursor = append ? history.value.at(-1)?.id : null;
+  const preservePages = preserveLoaded && history.value.length > 0;
   historyTask = (async () => {
     try {
       const data = await request(
@@ -144,15 +145,23 @@ function fetchHistory(append = false) {
       );
       if (disposed) return;
       const incoming = data.items || [];
-      history.value = append
-        ? [
-            ...history.value,
-            ...incoming.filter(
-              (item) => !history.value.some((old) => old.id === item.id),
-            ),
-          ]
-        : incoming;
-      hasMore.value = incoming.length === 20;
+      if (preservePages) {
+        // Failed execution must not remove evidence the user already opened.
+        const merged = new Map(history.value.map((item) => [item.id, item]));
+        for (const item of incoming) merged.set(item.id, item);
+        history.value = [...merged.values()].sort((a, b) => b.id - a.id);
+      } else {
+        history.value = append
+          ? [
+              ...history.value,
+              ...incoming.filter(
+                (item) => !history.value.some((old) => old.id === item.id),
+              ),
+            ]
+          : incoming;
+        hasMore.value = incoming.length === 20;
+      }
+      // A preserved list keeps its oldest loaded cursor and pagination boundary.
       historyLoaded.value = true;
     } catch (e) {
       if (!disposed) historyError.value = e.message;
@@ -227,6 +236,7 @@ async function executePreview() {
   executing.value = true;
   clearFeedback();
   invalidatePreview();
+  let failed = false;
   try {
     const data = await request("/api/site-changes/execute", { token });
     if (disposed) return;
@@ -234,11 +244,13 @@ async function executePreview() {
     notice.value = data.change.message || statusText(data.change.status);
     showForm.value = false;
   } catch (e) {
+    failed = true;
     if (!disposed) error.value = e.message;
   } finally {
     // Consume the token once even on transport errors; history is the recovery path.
     await historyTask;
-    if (!disposed) await Promise.all([fetchSites(), fetchHistory()]);
+    if (!disposed)
+      await Promise.all([fetchSites(), fetchHistory(false, failed)]);
     if (!disposed) executing.value = false;
   }
 }
