@@ -63,7 +63,7 @@ function parseHash() {
   if (token) {
     localStorage.setItem("panel_token", token);
     window.location.hash = "";
-    router.replace(route.query.redirect || "/");
+    router.replace(route.query.redirect || "/workspaces");
     return;
   }
   if (err) {
@@ -94,7 +94,7 @@ const hasCode = () => smsCode.value.length >= 6;
 
 function setTokenAndRedirect(data) {
   if (data.token) localStorage.setItem("panel_token", data.token);
-  const redirect = route.query.redirect || "/";
+  const redirect = route.query.redirect || "/workspaces";
   router.push(redirect);
 }
 

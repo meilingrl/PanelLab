@@ -25,6 +25,7 @@ onMounted(async () => {
 });
 
 const navItems = [
+  { path: "/workspaces", name: "任务工作区", icon: "▱" },
   { path: "/settings", name: "用户中心", icon: "👤" },
   { path: "/monitor", name: "系统监控", icon: "📈" },
   { path: "/terminal", name: "终端控制", icon: "💻" },
@@ -47,14 +48,14 @@ function onToggleTheme() {
 }
 
 function goOverview() {
-  router.push("/settings");
+  router.push("/workspaces");
 }
 </script>
 
 <template>
   <div class="dashboard-layout">
     <aside class="sidebar">
-      <div class="sidebar-header" @click="goOverview">
+      <div class="sidebar-header" role="link" tabindex="0" @click="goOverview" @keydown.enter="goOverview" @keydown.space.prevent="goOverview">
         <span class="app-name">PanelLab</span>
       </div>
       <nav class="sidebar-nav">

@@ -20,8 +20,12 @@ const routes = [
     children: [
       {
         path: '',
-        name: 'Overview',
-        component: () => import('../views/dashboard/Overview.vue'),
+        redirect: '/workspaces',
+      },
+      {
+        path: 'workspaces',
+        name: 'Workspaces',
+        component: () => import('../views/dashboard/Workspaces.vue'),
       },
       {
         path: 'monitor',
@@ -75,7 +79,7 @@ router.beforeEach((to, _from, next) => {
   const token = getToken()
   if (to.meta.public) {
     if (token && (to.name === 'Login' || to.name === 'Register')) {
-      next({ path: '/settings' })
+      next({ path: '/workspaces' })
     } else {
       next()
     }
