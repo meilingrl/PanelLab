@@ -73,6 +73,8 @@ Taskcards/filterbyserver/kind; no fabricatedstatus. Create/edit form:name,kind,s
 
 Resolve Task1 minor: WSopen alone is not SSHready. Backend sends explicit ready controlframe onlyafterauthentication/shell/cwdsetup; store staysconnecting untilthatframe, handleserror/close withoutsuccessflash, subsequentterminaltext remainsraw. Addfocused storetest (existingterminal-ticket.test.js) foropen-vs-ready andfailedsetup; do notparsearbitraryremoteoutput asreadiness.
 
+Network UI shows cumulative counters as cumulative, and may derive clearly labeled approximate B/s only from two successful samples for the same server/interface within30s and nonnegative counters; reset onserverchange/failure/counterreset. Addbehavior calculationtest, neverpretend totalbytes is rate.
+
 Use APIservice centralizedBearer/errorJSON parsing; abort/sequenceguards forswitches, no stale responses apply toanother task/server, disableduplicate submits. Responsive390CSSpx, semanticlabels, keyboard. Keep filesfocused, no giant allinonecomponent. No screenshots hardcoded, noHTMLinsertion oflogs.
 
 - [ ] RED Vitest actualcomponentinteractions: connecttrustrequiresclick; creationpicker pathchoice; processbinding; taskselection stale response; logfailure preservesdata/stale; downloadrequest; reportedlabel; terminaltarget/cwd; deleteconfirmation.
