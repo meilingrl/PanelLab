@@ -197,3 +197,25 @@ def test_token_expiring_while_waiting_for_lock_never_applies(env,monkeypatch):
     assert execute(env,p).status_code==401
     assert env[0].get('/api/sites',headers=env[1]).json()=={'items':[]}
     assert env[0].get('/api/site-changes',headers=env[1]).json()=={'items':[]}
+
+@pytest.mark.parametrize('same_owner,existing_port', [(False, 8080), (True, 9090)])
+def test_existing_uppercase_domain_conflicts_case_insensitively(env, same_owner, existing_port):
+    # Imported/direct-DB rows may predate the API's lowercase normalization.
+    # Cross-owner same-port conflicts; per-owner uniqueness also spans ports.
+    with SessionLocal() as db:
+        owner_id = 1
+        if not same_owner:
+            owner = User(username='other', password_hash='unused')
+            db.add(owner)
+            db.flush()
+            owner_id = owner.id
+        db.add(SiteConfig(user_id=owner_id, name='private-legacy-site',
+                          domain='WEB.EXAMPLE.COM', site_type='static',
+                          root_path='/private/legacy', listen_port=existing_port))
+        db.commit()
+    response = env[0].post('/api/site-changes/preview', headers=env[1],
+                           json={'operation': 'create', 'config': CONFIG})
+    assert response.status_code == 409
+    assert 'private-legacy-site' not in response.text
+    assert '/private/legacy' not in response.text
+    assert env[0].get('/api/site-changes', headers=env[1]).json() == {'items': []}

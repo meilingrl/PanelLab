@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import jwt
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from models.site_config import SiteConfig
 from models.site_change import SiteChange
@@ -49,8 +50,8 @@ def resolve(db, user_id, request, manager, filename=None):
         if row: others=others.filter(SiteConfig.id != row.id)
         # Keep legacy per-owner domain uniqueness and add global domain+port collision guard.
         conflict=others.filter(((SiteConfig.user_id==user_id) &
-                               ((SiteConfig.name==config.name) | (SiteConfig.domain==config.domain))) |
-                              ((SiteConfig.domain==config.domain) & (SiteConfig.listen_port==config.listen_port))).first()
+                               ((SiteConfig.name==config.name) | (func.lower(SiteConfig.domain)==config.domain))) |
+                              ((func.lower(SiteConfig.domain)==config.domain) & (SiteConfig.listen_port==config.listen_port))).first()
         if conflict: raise HTTPException(409,'站点名称或监听域名冲突')
     target = manager.get_config_filename(SiteRuntimeConfig(row.id,row.name,row.domain,row.site_type,row.root_path,row.proxy_target,row.listen_port,row.enabled,row.config_filename)) if row else (filename or f'site-{uuid.uuid4().hex}.conf')
     if filename is not None and target != filename: raise HTTPException(409,'目标已变化，请重新预览')

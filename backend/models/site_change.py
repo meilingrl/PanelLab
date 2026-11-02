@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import Integer, String, Text, DateTime, Boolean, JSON, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from database import Base
 
 class SiteChange(Base):
@@ -15,8 +16,8 @@ class SiteChange(Base):
     operation: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    before: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    after: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    before: Mapped[Optional[str]] = mapped_column(Text().with_variant(MEDIUMTEXT(), "mysql"), nullable=True)
+    after: Mapped[Optional[str]] = mapped_column(Text().with_variant(MEDIUMTEXT(), "mysql"), nullable=True)
     steps: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     simulated: Mapped[bool] = mapped_column(Boolean, nullable=False)
