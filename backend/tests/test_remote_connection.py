@@ -193,3 +193,38 @@ def test_all_remote_reads_hide_other_owners(remote):
         assert remote.get(f'/api/servers/72/{path}').status_code == 404
     for path in ('connection/check', 'terminal-ticket'):
         assert remote.post(f'/api/servers/72/{path}', json={}).status_code == 404
+
+
+def test_terminal_initial_directory_write_has_deadline(remote, network, monkeypatch):
+    """A peer withholding PTY window credits cannot hang startup's initial cd."""
+    import stat
+    import threading
+    from contextlib import contextmanager
+    from routers import terminal
+    from services.remote_connection import remote_deadline
+
+    pin(remote)
+    ticket = remote.post('/api/servers/71/terminal-ticket', json={'cwd': '/home/runner'}).json()['ticket']
+    closed = threading.Event()
+    class Shell:
+        def __init__(self): self.timeout = None
+        def settimeout(self, value): self.timeout = value
+        def sendall(self, data):
+            # A closed transport releases Paramiko's blocked window-credit wait.
+            closed.wait(0.3)
+            raise OSError('fixture window credit unavailable')
+        def close(self): closed.set()
+    shell = Shell()
+    client = SimpleNamespace(get_transport=lambda: SimpleNamespace(close=closed.set), invoke_shell=lambda **kw: shell)
+    @contextmanager
+    def opened(*args): yield client
+    @contextmanager
+    def sftp(*args):
+        yield SimpleNamespace(normalize=lambda p: p, lstat=lambda p: SimpleNamespace(st_mode=stat.S_IFDIR))
+    monkeypatch.setattr(terminal, 'open_remote', opened)
+    monkeypatch.setattr(terminal, 'open_sftp', sftp)
+    monkeypatch.setattr(terminal, 'remote_deadline', lambda client: remote_deadline(client, timeout=0.02))
+    with remote.websocket_connect(f'/api/ws/terminal?ticket={ticket}&server_id=71') as ws:
+        assert ws.receive_text() == 'Remote operation timed out\r\n'
+    assert closed.is_set()
+    assert shell.timeout == 10

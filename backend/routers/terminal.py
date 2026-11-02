@@ -31,14 +31,14 @@ async def terminal_ws(websocket: WebSocket, ticket: str = Query(..., max_length=
                     resolved = safe_path(sftp, cwd)
             with remote_deadline(client):
                 shell = client.invoke_shell(term='xterm')
-            try:
-                if resolved is not None:
-                    shell.sendall('cd -- ' + shlex.quote(resolved) + '\r')
-                shell.settimeout(10)
-                return shell
-            except Exception:
-                shell.close()
-                raise
+                try:
+                    shell.settimeout(10)
+                    if resolved is not None:
+                        shell.sendall('cd -- ' + shlex.quote(resolved) + '\r')
+                    return shell
+                except Exception:
+                    shell.close()
+                    raise
 
         channel = await asyncio.to_thread(start_shell)
         await websocket.send_text('Connected to trusted SSH server.\r\n')
