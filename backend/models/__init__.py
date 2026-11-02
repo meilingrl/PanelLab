@@ -4,3 +4,4 @@ from models.server import Server  # noqa: F401
 from models.site_config import SiteConfig  # noqa: F401
 from models.feedback import Feedback  # noqa: F401
 from models.site_change import SiteChange  # noqa: F401
+from models.remote_connection import RemoteConnection  # noqa: F401
