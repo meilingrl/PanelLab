@@ -75,7 +75,7 @@ def _decode_token(token: str) -> Optional[str]:
 
 def _password_placeholder() -> str:
     """无密码用户（仅手机/第三方登录）占位哈希，不可用于登录。"""
-    return bcrypt.hashpw(b"no-password-placeholder", bcrypt.gensalt()).decode("ascii")
+    return bcrypt.hashpw(secrets.token_bytes(32), bcrypt.gensalt()).decode("ascii")
 
 
 def _ensure_unique_username(db: Session, base_username: str) -> str:
@@ -103,6 +103,33 @@ def get_current_user(
     return user
 
 
+def require_operator(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    settings = get_settings()
+    operators = {name.strip() for name in settings.operator_usernames.split(",") if name.strip()}
+    if settings.app_env == "production" and current_user.username not in operators:
+        raise HTTPException(status_code=403, detail="需要运维账号")
+    return current_user
+
+
+def require_registration():
+    if get_settings().app_env == "production":
+        raise HTTPException(status_code=403, detail="注册已关闭")
+
+
+def require_demo_auth():
+    settings = get_settings()
+    if settings.app_env == "production" or not settings.enable_demo_auth:
+        raise HTTPException(status_code=403, detail="登录方式已关闭")
+
+
+@router.get("/capabilities")
+def capabilities():
+    settings = get_settings()
+    demo = settings.app_env != "production" and settings.enable_demo_auth
+    return {"password": True, "register": settings.app_env != "production",
+            "sms": demo, "wechat": demo, "qq": demo, "demo": demo}
+
+
 @router.post("/login", response_model=LoginResponse)
 def login(body: LoginRequest, db: Annotated[Session, Depends(get_db)]):
     """登录：校验用户名密码，返回 JWT 与用户信息。"""
@@ -125,7 +152,7 @@ def me(current_user: Annotated[User, Depends(get_current_user)]):
     return UserMe(username=current_user.username)
 
 
-@router.post("/register", response_model=LoginResponse)
+@router.post("/register", response_model=LoginResponse, dependencies=[Depends(require_registration)])
 def register(body: RegisterRequest, db: Annotated[Session, Depends(get_db)]):
     """注册新用户；成功后直接返回 token 与用户信息，可视为登录。"""
     username = body.username.strip()
@@ -167,7 +194,7 @@ def _phone_valid(phone: str) -> bool:
     return bool(re.match(r"^1\d{10}$", phone))
 
 
-@router.post("/sms/send")
+@router.post("/sms/send", dependencies=[Depends(require_demo_auth)])
 def sms_send(body: SmsSendRequest):
     """发送验证码（mock：固定 123456）；同一手机 60s 内仅可发送一次。"""
     phone = body.phone.strip()
@@ -181,7 +208,7 @@ def sms_send(body: SmsSendRequest):
     return {"message": "验证码已发送"}
 
 
-@router.post("/sms/login", response_model=LoginResponse)
+@router.post("/sms/login", response_model=LoginResponse, dependencies=[Depends(require_demo_auth)])
 def sms_login(body: SmsLoginRequest, db: Annotated[Session, Depends(get_db)]):
     """验证码登录；用户不存在则自动创建（username=phone_xxx）。"""
     phone = body.phone.strip()
@@ -235,7 +262,7 @@ def _redirect_frontend_with_token(token: str, username: str, error: Optional[str
     return RedirectResponse(url=f"{base}#token={quote(token)}&username={quote(username)}", status_code=302)
 
 
-@router.get("/wechat/qr")
+@router.get("/wechat/qr", dependencies=[Depends(require_demo_auth)])
 def wechat_qr():
     """获取微信扫码授权 URL；已配置则返回真实 qrconnect URL，否则 mock。"""
     state = secrets.token_urlsafe(16)
@@ -288,7 +315,7 @@ def _wechat_find_or_create_user(db: Session, openid: str) -> Optional[User]:
         return db.query(User).filter(User.wechat_openid == openid).first()
 
 
-@router.get("/wechat/callback")
+@router.get("/wechat/callback", dependencies=[Depends(require_demo_auth)])
 def wechat_callback_get(
     db: Annotated[Session, Depends(get_db)],
     code: Optional[str] = None,
@@ -318,7 +345,7 @@ def wechat_callback_get(
     return HTMLResponse(html)
 
 
-@router.get("/wechat/poll")
+@router.get("/wechat/poll", dependencies=[Depends(require_demo_auth)])
 def wechat_poll(state: Optional[str] = None):
     """PC 端轮询：扫码并确认后，凭 state 取回 token；有则返回 200+token，无则 202。"""
     if not state or state not in _wechat_pending:
@@ -327,7 +354,7 @@ def wechat_poll(state: Optional[str] = None):
     return LoginResponse(token=data["token"], user=UserMe(username=data["username"]))
 
 
-@router.post("/wechat/callback", response_model=LoginResponse)
+@router.post("/wechat/callback", response_model=LoginResponse, dependencies=[Depends(require_demo_auth)])
 def wechat_callback_post(
     db: Annotated[Session, Depends(get_db)],
     code: Optional[str] = None,
@@ -409,7 +436,7 @@ def _qq_find_or_create_user(db: Session, openid: str) -> Optional[User]:
         return db.query(User).filter(User.qq_openid == openid).first()
 
 
-@router.get("/qq/url")
+@router.get("/qq/url", dependencies=[Depends(require_demo_auth)])
 def qq_url():
     """获取 QQ 互联授权 URL；已配置则返回真实 authorize URL，否则 mock。"""
     state = secrets.token_urlsafe(16)
@@ -423,7 +450,7 @@ def qq_url():
     return {"auth_url": f"{QQ_AUTHORIZE_URL}?state={state}", "state": state, "mock": True}
 
 
-@router.get("/qq/callback")
+@router.get("/qq/callback", dependencies=[Depends(require_demo_auth)])
 def qq_callback_get(
     db: Annotated[Session, Depends(get_db)],
     code: Optional[str] = None,
@@ -452,7 +479,7 @@ def qq_callback_get(
     return _redirect_frontend_with_token(token, user.username)
 
 
-@router.post("/qq/callback", response_model=LoginResponse)
+@router.post("/qq/callback", response_model=LoginResponse, dependencies=[Depends(require_demo_auth)])
 def qq_callback_post(
     db: Annotated[Session, Depends(get_db)],
     code: Optional[str] = None,

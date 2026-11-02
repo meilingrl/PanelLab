@@ -6,6 +6,8 @@ from datetime import datetime
 _test_db = os.path.join(os.path.dirname(__file__), "test.db")
 os.environ["DATABASE_URL"] = f"sqlite:///{_test_db}"
 os.environ["NGINX_SKIP_APPLY"] = "1"
+os.environ["APP_ENV"] = "test"
+os.environ["ENABLE_DEMO_AUTH"] = "1"
 
 import pytest
 import bcrypt
@@ -17,6 +19,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(scope="module")
 def db_setup():
+    engine.dispose()
     if os.path.exists(_test_db):
         os.remove(_test_db)
     Base.metadata.create_all(bind=engine)
@@ -34,6 +37,7 @@ def db_setup():
     finally:
         db.close()
     yield
+    engine.dispose()
     try:
         if os.path.exists(_test_db):
             os.remove(_test_db)

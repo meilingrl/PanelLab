@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.site_config import SiteConfig
 from models.user import User
-from routers.auth import get_current_user
+from routers.auth import require_operator
 from schemas.sites import SiteCreate, SiteItem, SiteListResponse, SiteUpdate
 from services.nginx_manager import NginxManager, NginxManagerError, SiteRuntimeConfig
 
@@ -89,7 +89,7 @@ def _apply_site_or_raise(db: Session, site: SiteConfig):
 
 @router.get("", response_model=SiteListResponse)
 def list_sites(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_operator)],
     db: Annotated[Session, Depends(get_db)],
 ):
     rows = (
@@ -104,7 +104,7 @@ def list_sites(
 @router.get("/{site_id}", response_model=SiteItem)
 def get_site(
     site_id: int,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_operator)],
     db: Annotated[Session, Depends(get_db)],
 ):
     row = (
@@ -120,7 +120,7 @@ def get_site(
 @router.post("", response_model=SiteItem)
 def create_site(
     body: SiteCreate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_operator)],
     db: Annotated[Session, Depends(get_db)],
 ):
     _ensure_unique_fields(db, body, current_user.id)
@@ -141,7 +141,7 @@ def create_site(
 def update_site(
     site_id: int,
     body: SiteUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_operator)],
     db: Annotated[Session, Depends(get_db)],
 ):
     row = (
@@ -166,7 +166,7 @@ def update_site(
 @router.delete("/{site_id}")
 def delete_site(
     site_id: int,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_operator)],
     db: Annotated[Session, Depends(get_db)],
 ):
     row = (
@@ -190,7 +190,7 @@ def delete_site(
 @router.post("/{site_id}/apply", response_model=SiteItem)
 def apply_site(
     site_id: int,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_operator)],
     db: Annotated[Session, Depends(get_db)],
 ):
     row = (
