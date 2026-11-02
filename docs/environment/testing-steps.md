@@ -2,6 +2,18 @@
 
 以下历史步骤覆盖登录与基础功能。站点变更分支先运行下面的自动检查；真实服务验证使用脚本自行创建的隔离实例。
 
+## 远程任务工作台隔离验收
+
+在仓库根目录、已安装后端测试依赖并启用Docker的情况下：
+
+```bash
+docker pull mysql:8.4.9
+docker build -t panellab-ssh-lab:20261103 scripts/fixtures/remote_workspace
+python scripts/verify_workspace_lab.py
+```
+
+脚本只创建自己的Linux SSH/SFTP与MySQL实例，使用本机随机端口，退出时回收自己的容器和API进程。它验证任务、CLI、文件、PTY与公钥变化拒绝；测试日志是夹具，不是模型训练结果。`--serve` 可在检查通过后保留隔离API供手工验收，Ctrl-C会回收本次环境；原有服务不被接管。完整证据见[本轮记录](../project/remote-workspace-20261103.md)。
+
 ## 站点变更自动检查
 
 ```bash

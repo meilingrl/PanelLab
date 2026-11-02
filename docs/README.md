@@ -1,6 +1,6 @@
 # PanelLab 文档索引
 
-本轮入口：[远程任务工作台设计](design/design-remote-workspace.md) · [实施计划](design/plan-remote-workspace.md)。
+本轮入口：[远程任务工作台设计](design/design-remote-workspace.md) · [实施计划](design/plan-remote-workspace.md) · [本轮记录](project/remote-workspace-20261103.md)。
 
 上一轮入口：[站点变更设计](design/design-safe-site-changes.md) · [实施计划](design/plan-safe-site-changes.md) · [改进与验证记录](project/production-readiness-20261102.md)。
 

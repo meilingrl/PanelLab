@@ -28,9 +28,9 @@
 
 Optional `GET /api/remote/tailscale` operator-protected production reads fixed `tailscale status --json` with5s timeout,512KiB cap; returns available,reason,devices[{name,dns_name,addresses,online}], bounded200; no login/policy writes or SSH auto-trust. Handle absentbinary/nonzero/malformed JSON. Do not add command configuration from client.
 
-- [ ] RED tests: unowned/notfound probes; no password sent before pin; invalid/expired/changedendpoint trusttoken; changedhostkey prevents auth; safe filenames/path reads; collector bounded timeout/output and noGPU; PID identity parsing; terminal ticketcrossuser/replay/expiry; tailscale unavailable. Use fakes for network boundary and real fixture text for parsers, no source-string assertions.
-- [ ] Implement shared connection and fixed probe with structured exception mapping; never AutoAddPolicy. Keep protocol schema precise for next tasks.
-- [ ] GREEN focused tests, then backend suite once. Small commits: connectiontrust, observation/files, ticketintegration. Report exact JSON/examples/helpers and limitations.
+- [x] RED tests: unowned/notfound probes; no password sent before pin; invalid/expired/changedendpoint trusttoken; changedhostkey prevents auth; safe filenames/path reads; collector bounded timeout/output and noGPU; PID identity parsing; terminal ticketcrossuser/replay/expiry; tailscale unavailable. Use fakes for network boundary and real fixture text for parsers, no source-string assertions.
+- [x] Implement shared connection and fixed probe with structured exception mapping; never AutoAddPolicy. Keep protocol schema precise for next tasks.
+- [x] GREEN focused tests, then backend suite once. Small commits: connectiontrust, observation/files, ticketintegration. Report exact JSON/examples/helpers and limitations.
 
 ```python
 # Representative acceptance; flesh fixtures to execute behavior.
@@ -53,9 +53,9 @@ For binding/observation, do not infer absence from capped200processdiscovery. Ex
 
 CLI `python scripts/panellab.py --help`: stdliburllib+argparse; --url defaulthttp://127.0.0.1:8000; bearer from PANEL_TOKEN or --token-file (no tokencommandlineflag); no logsecrets. Commands servers, tasks list/show/create/update/remove, observe ID, files ID [PATH], logs ID, download ID PATH --output LOCAL, runs ID, report ID. Creation/update/report accepts --json path or '-'stdin; JSON outputsuccess and errors, nonzeroexit onerror; download defaultrefuse overwrite, remove requires --yes; all mutations hit sameAPI (no SSHinCLI). HTTP nonloopback refused unless explicit --allow-insecure; httpsnormal. Redact sensitive errorcontent? bounded safeerrorJSON only; no automatic retries mutations. Documenthelp examples inreport for UI.
 
-- [ ] RED meaningful tests: ownerisolation; bindingchecks; pathescapes/symlink/specialfiles/spacequotes; boundedtail/download; lostconnection; PIDreuse; reportedrunstatus/times/pagination; serverdeleteguard; CLI fakeHTTPserver verifies authorization,URLs,JSONerrors,nonzero,downloadnooverwrite,tokenabsent and insecureURLrejection.
-- [ ] Implement cohesive modules andCLI; methods ownership-first before network.
-- [ ] GREEN focused thenbackendfullsuite once. Commit workloads,files/runs,CLI separately. Report exactcontracts, outputexamples andtestevidence.
+- [x] RED meaningful tests: ownerisolation; bindingchecks; pathescapes/symlink/specialfiles/spacequotes; boundedtail/download; lostconnection; PIDreuse; reportedrunstatus/times/pagination; serverdeleteguard; CLI fakeHTTPserver verifies authorization,URLs,JSONerrors,nonzero,downloadnooverwrite,tokenabsent and insecureURLrejection.
+- [x] Implement cohesive modules andCLI; methods ownership-first before network.
+- [x] GREEN focused thenbackendfullsuite once. Commit workloads,files/runs,CLI separately. Report exactcontracts, outputexamples andtestevidence.
 
 ```python
 assert other_client.get(f'/api/workloads/{task_id}/observation').status_code == 404
@@ -77,9 +77,9 @@ Network UI shows cumulative counters as cumulative, and may derive clearly label
 
 Use APIservice centralizedBearer/errorJSON parsing; abort/sequenceguards forswitches, no stale responses apply toanother task/server, disableduplicate submits. Responsive390CSSpx, semanticlabels, keyboard. Keep filesfocused, no giant allinonecomponent. No screenshots hardcoded, noHTMLinsertion oflogs.
 
-- [ ] RED Vitest actualcomponentinteractions: connecttrustrequiresclick; creationpicker pathchoice; processbinding; taskselection stale response; logfailure preservesdata/stale; downloadrequest; reportedlabel; terminaltarget/cwd; deleteconfirmation.
-- [ ] Implement component tree and defaultnavigation usingreal APIs.
-- [ ] npm test andnpmrunbuild, meaningfultests notsnapshots. Twoormoresmallcommits. Report APIassumptions andtestevidence; root handlesrealbrowservalidation.
+- [x] RED Vitest actualcomponentinteractions: connecttrustrequiresclick; creationpicker pathchoice; processbinding; taskselection stale response; logfailure preservesdata/stale; downloadrequest; reportedlabel; terminaltarget/cwd; deleteconfirmation.
+- [x] Implement component tree and defaultnavigation usingreal APIs.
+- [x] npm test andnpmrunbuild, meaningfultests notsnapshots. Twoormoresmallcommits. Report APIassumptions andtestevidence; root handlesrealbrowservalidation.
 
 ```javascript
 // Representative behavior, not source inspection.
@@ -90,7 +90,7 @@ expect(createRequest.root_path).toBe('/home/lab/experiments/run A')
 
 ## Task 4: independent end-to-end verification and delivery (controller)
 
-- [ ] Run isolated local SSH/SFTP server with knownhostkey and fixtureprocess/files; exercise trust,mismatch,discovery,pinning,logtail,download,CLIshareddata; preserve originalserver state.
-- [ ] Browser actual create/selecttask,log/files/download andnarrowviewport; screenshot. Backendandfrontendfinalchecks afterlastcodechange.
+- [x] Run isolated local SSH/SFTP server with knownhostkey and fixtureprocess/files; exercise trust,mismatch,discovery,pinning,logtail,download,CLIshareddata; preserve originalserver state.
+- [x] Browser actual create/selecttask,log/files/download andnarrowviewport; screenshot. Backendandfrontendfinalchecks afterlastcodechange.
 - [ ] Independentwholebranchreview; onefixwave ifneeded; updatedREADME/docsindex/manual anddateddeliveryreport distinguish implemented/verified/deferred. KeepTailscalerealnetworkuntested explicit.
 - [ ] Clean gitstatus, document localbranch relationship and unchangedmain. Stop onlyselfcreatedtestservices. Keep worktree/reviewevidence; no unapprovedremotechanges.
