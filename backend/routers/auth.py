@@ -134,7 +134,7 @@ def capabilities():
 def login(body: LoginRequest, db: Annotated[Session, Depends(get_db)]):
     """登录：校验用户名密码，返回 JWT 与用户信息。"""
     user = db.query(User).filter(User.username == body.username).first()
-    if not user or not _verify_password(body.password, user.password_hash):
+    if not user or body.password == "no-password-placeholder" or not _verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = _create_token(user.username)
     return LoginResponse(token=token, user=UserMe(username=user.username))

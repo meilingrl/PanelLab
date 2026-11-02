@@ -93,3 +93,12 @@ def test_development_demo_routes_closed_by_default(client, monkeypatch):
         response = client.request(method, path, json={"phone": "13800138000"}, follow_redirects=False)
         assert response.status_code == 403
         assert "token" not in response.text.lower()
+
+
+def test_legacy_public_placeholder_cannot_log_in(client, production):
+    db = SessionLocal()
+    db.add(User(username="legacy_oauth", wechat_openid="legacy", password_hash=bcrypt.hashpw(b"no-password-placeholder", bcrypt.gensalt()).decode()))
+    db.commit()
+    db.close()
+    response = client.post('/api/auth/login', json={'username': 'legacy_oauth', 'password': 'no-password-placeholder'})
+    assert response.status_code == 401
