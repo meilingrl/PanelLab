@@ -44,6 +44,7 @@ export function useTerminalStore() {
       id,
       serverId: server.id,
       host: server.host,
+      cwd: options.cwd ?? null,
       status: 'connecting',
       ws: null,
       buffer: [],
@@ -61,16 +62,25 @@ export function useTerminalStore() {
         const ws = new WebSocket(wsUrl)
         session.ws = ws
 
-        ws.onopen = () => {
-          updateSessionStatus(id, 'connected', ws)
-          if (!resolved) {
-            resolved = true
-            resolve(sessions.value.find((s) => s.id === id))
-          }
-        }
+        const readinessTimeout = setTimeout(() => {
+          if (resolved) return
+          resolved = true
+          updateSessionStatus(id, 'error')
+          reject(new Error('SSH 就绪超时，请检查连接后重试'))
+          ws.close()
+        }, 35000)
+        ws.onopen = () => {} // WebSocket transport is not SSH readiness.
 
         ws.onmessage = (event) => {
           const data = event.data
+          // Only the first protocol frame is control data. Once ready, all output is raw.
+          if (!resolved && data === JSON.stringify({ type: 'panellab-terminal-ready', version: 1 })) {
+            resolved = true
+            clearTimeout(readinessTimeout)
+            updateSessionStatus(id, 'connected', ws)
+            resolve(sessions.value.find((s) => s.id === id))
+            return
+          }
           const s = sessions.value.find((ss) => ss.id === id)
           if (s?.attachedTerm && typeof s.attachedTerm.write === 'function') {
             s.attachedTerm.write(data)
@@ -82,7 +92,8 @@ export function useTerminalStore() {
         }
 
         ws.onclose = () => {
-          updateSessionStatus(id, 'disconnected', null)
+          clearTimeout(readinessTimeout)
+          updateSessionStatus(id, resolved && sessions.value.find((s) => s.id === id)?.status === 'connected' ? 'disconnected' : 'error', null)
           const s = sessions.value.find((ss) => ss.id === id)
           if (s?.attachedTerm && typeof s.attachedTerm.writeln === 'function') {
             s.attachedTerm.writeln('\r\n\x1b[33m[系统]\x1b[0m 连接已断开')
@@ -94,6 +105,8 @@ export function useTerminalStore() {
         }
 
         ws.onerror = () => {
+          clearTimeout(readinessTimeout)
+          updateSessionStatus(id, 'error')
           if (!resolved) {
             resolved = true
             reject(new Error('WebSocket 错误'))
@@ -129,7 +142,7 @@ export function useTerminalStore() {
 
   function sendToSession(sessionId, data) {
     const session = sessions.value.find((s) => s.id === sessionId)
-    if (session?.ws && session.ws.readyState === WebSocket.OPEN) {
+    if (session?.status === 'connected' && session.ws && session.ws.readyState === WebSocket.OPEN) {
       session.ws.send(data)
     }
   }

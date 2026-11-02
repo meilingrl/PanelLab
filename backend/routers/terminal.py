@@ -41,6 +41,7 @@ async def terminal_ws(websocket: WebSocket, ticket: str = Query(..., max_length=
                     raise
 
         channel = await asyncio.to_thread(start_shell)
+        await websocket.send_text(json.dumps({'type': 'panellab-terminal-ready', 'version': 1}, separators=(',', ':')))
         await websocket.send_text('Connected to trusted SSH server.\r\n')
 
         async def ws_to_ssh():

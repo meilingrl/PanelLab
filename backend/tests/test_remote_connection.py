@@ -228,3 +228,36 @@ def test_terminal_initial_directory_write_has_deadline(remote, network, monkeypa
         assert ws.receive_text() == 'Remote operation timed out\r\n'
     assert closed.is_set()
     assert shell.timeout == 10
+
+
+def test_terminal_ready_frame_follows_auth_shell_and_cwd_setup(remote, network, monkeypatch):
+    """The first control frame cannot precede successful SSH/PTTY/cwd setup."""
+    import stat
+    from contextlib import contextmanager
+    from routers import terminal
+    pin(remote)
+    ticket = remote.post('/api/servers/71/terminal-ticket', json={'cwd': '/home/runner'}).json()['ticket']
+    events = []
+    class Shell:
+        def settimeout(self, value): events.append(('timeout', value))
+        def sendall(self, text): events.append(('write', text))
+        def recv_ready(self): return False
+        def exit_status_ready(self): return True
+        def close(self): pass
+    def shell(**kwargs):
+        events.append('shell')
+        return Shell()
+    client = SimpleNamespace(get_transport=lambda: SimpleNamespace(close=lambda: None), invoke_shell=shell)
+    @contextmanager
+    def opened(*args):
+        events.append('authenticated')
+        yield client
+    @contextmanager
+    def sftp(*args):
+        yield SimpleNamespace(normalize=lambda path: path, lstat=lambda path: SimpleNamespace(st_mode=stat.S_IFDIR))
+    monkeypatch.setattr(terminal, 'open_remote', opened)
+    monkeypatch.setattr(terminal, 'open_sftp', sftp)
+    with remote.websocket_connect(f'/api/ws/terminal?ticket={ticket}&server_id=71') as ws:
+        assert ws.receive_text() == '{"type":"panellab-terminal-ready","version":1}'
+        assert events == ['authenticated', 'shell', ('timeout', 10), ('write', 'cd -- /home/runner\r')]
+        assert ws.receive_text() == 'Connected to trusted SSH server.\r\n'
