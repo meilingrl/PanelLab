@@ -146,14 +146,14 @@ class NginxManager:
             if fd is not None: os.close(fd)
             _PROCESS_LOCK.release()
 
-    def _replace(self, path, content):
+    def _replace(self, path, content, restore_mode=None):
         # Revalidate immediately before touching the target.
         self.path(path.name)
         if content is None:
             path.unlink(missing_ok=True)
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+        mode = restore_mode if restore_mode is not None else (stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644)
         fd, temporary = tempfile.mkstemp(prefix='.panellab-', suffix='.tmp', dir=path.parent)
         try:
             with os.fdopen(fd, 'wb') as stream:
@@ -180,6 +180,7 @@ class NginxManager:
     def apply_change(self, filename, after):
         path = self.path(filename)
         before = self._read(path)
+        before_mode = stat.S_IMODE(path.stat().st_mode) if before is not None else None
         if self.settings.nginx_skip_apply:
             return ChangeResult('simulated', [], '模拟完成，未写入配置或执行 Nginx')
         steps = []
@@ -199,7 +200,7 @@ class NginxManager:
             return ChangeResult('applied', steps, '配置校验通过，reload 命令成功；未验证 HTTP 可用性或 worker 替换')
         except (NginxManagerError, OSError):
             try:
-                step('restore', lambda: self._replace(path, before))
+                step('restore', lambda: self._replace(path, before, before_mode))
                 if reload_attempted:
                     step('restore_test', lambda: self._run_command(self.settings.nginx_test_cmd, '恢复校验失败'))
                     step('restore_reload', lambda: self._run_command(self.settings.nginx_reload_cmd, '恢复重载失败'))

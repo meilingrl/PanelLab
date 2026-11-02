@@ -180,3 +180,20 @@ def test_pending_audit_commit_failure_never_touches_file(env,monkeypatch):
     assert execute(env,p).status_code==503
     assert not (env[2]/'conf').exists()
     assert env[0].get('/api/site-changes',headers=env[1]).json()=={'items':[]}
+
+def test_token_expiring_while_waiting_for_lock_never_applies(env,monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from services import site_changes
+    p=preview(env)
+    claims=jwt.decode(p['token'],get_settings().secret_key,algorithms=['HS256'],audience='site-change')
+    original=site_changes.NginxManager.change_lock
+    @contextmanager
+    def elapsed(manager):
+        with original(manager):
+            monkeypatch.setattr(site_changes,'time',SimpleNamespace(time=lambda:claims['exp']+1))
+            yield
+    monkeypatch.setattr(site_changes.NginxManager,'change_lock',elapsed)
+    assert execute(env,p).status_code==401
+    assert env[0].get('/api/sites',headers=env[1]).json()=={'items':[]}
+    assert env[0].get('/api/site-changes',headers=env[1]).json()=={'items':[]}

@@ -97,6 +97,8 @@ def execute(db,user,token):
     db.rollback()
     try:
         with manager.change_lock():
+            if time.time() >= claims.exp:
+                raise HTTPException(401, '预览凭证已过期，请重新预览')
             db.expire_all()
             if db.query(SiteChange).filter_by(jti=claims.jti).first():
                 raise HTTPException(409,'此预览已执行，请查看历史或重新预览')
@@ -109,15 +111,16 @@ def execute(db,user,token):
                               message='变更执行中；若此状态持续，请人工核查配置和运行态，勿盲目重试',simulated=manager.settings.nginx_skip_apply)
             db.add(change)
             try:
+                db.flush()
+                change_id = change.id
                 db.commit()
             except IntegrityError:
                 db.rollback(); raise HTTPException(409,'此预览已被认领，请查看变更历史') from None
             except SQLAlchemyError:
                 db.rollback(); raise HTTPException(503,'无法记录变更，未执行配置操作') from None
-            change_id=change.id
             try:
                 result=manager.apply_change(filename,after)
-            except NginxManagerError:
+            except (NginxManagerError, OSError):
                 # The durable pending row survives an unexpected filesystem failure.
                 raise HTTPException(503,dict(message='文件操作异常，需要人工核查',change_id=change_id,status='manual_review_required')) from None
             change.status=result.status; change.steps=result.steps; change.message=result.message

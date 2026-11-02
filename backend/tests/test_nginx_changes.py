@@ -95,3 +95,11 @@ def test_file_lock_excludes_other_process(manager,tmp_path):
         assert child.wait(timeout=3)==0
     finally:
         if child.poll() is None: child.kill(); child.wait()
+
+def test_failed_delete_restores_original_permissions(manager,tmp_path):
+    import stat
+    conf=tmp_path/'conf';conf.mkdir();target=conf/'web.conf';target.write_text('private');target.chmod(0o600)
+    script(manager,tmp_path,'test_fail')
+    assert manager.apply_change('web.conf',None).status=='failed_restored'
+    assert target.read_bytes()==b'private'
+    assert stat.S_IMODE(target.stat().st_mode)==0o600
