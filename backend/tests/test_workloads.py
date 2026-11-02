@@ -1,4 +1,5 @@
 """Durable metadata and remote read boundaries; only SSH transport is faked."""
+import errno
 import io
 import stat
 from contextlib import contextmanager
@@ -17,7 +18,7 @@ class SFTP:
     def __init__(self): self.data = {LOG: b'first\nlast\n'}
     def normalize(self, path): return path
     def lstat(self, path):
-        if path.endswith('/missing'): raise FileNotFoundError()
+        if path.endswith('/missing'): raise FileNotFoundError(errno.ENOENT, "missing")
         mode = stat.S_IFREG if path in self.data else stat.S_IFDIR
         if '/link' in path: mode = stat.S_IFLNK
         if '/fifo' in path: mode = stat.S_IFIFO
@@ -197,3 +198,15 @@ def test_bound_unavailable_creation_and_log_missing_unbound(workspace):
     response = client.patch(f'/api/workloads/{task}',json={'pid':55,'process_identity':'boot:99'})
     assert response.status_code == 503
     assert client.get(f'/api/workloads/{task}').json()['pid'] is None
+
+
+def test_lost_sftp_during_log_lookup_is_unavailable_not_fresh_missing(workspace,monkeypatch):
+    client,sftp,_ = workspace
+    task = create(workspace)
+    def disconnected(path): raise OSError('Socket is closed; private transport detail')
+    monkeypatch.setattr(sftp,'lstat',disconnected)
+    result = client.get(f'/api/workloads/{task}/observation')
+    assert result.status_code == 503
+    assert 'private transport detail' not in result.text
+    assert 'observed_at' not in result.json()
+    assert client.get(f'/api/workloads/{task}/text',params={'path':LOG}).status_code == 503

@@ -3,6 +3,7 @@
 SFTP has no portable openat/O_NOFOLLOW: a hostile concurrent remote rename can
 race these checks. The service never claims atomic remote filesystem snapshots.
 """
+import errno
 import posixpath
 import stat
 import time
@@ -49,8 +50,10 @@ def safe_path(sftp, path=None, *, root=None, kind='directory'):
         if normalized != path:
             fail('path_changed', 'Remote path changed during validation', 409)
         return normalized
-    except OSError:
-        fail('path_unavailable', 'Remote path does not exist or is inaccessible', 404)
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.EACCES, errno.EPERM):
+            fail('path_unavailable', 'Remote path does not exist or is inaccessible', 404)
+        fail('path_unavailable', 'Remote path lookup is unavailable', 503)
 
 
 def list_directory(sftp, path=None, *, root=None):
