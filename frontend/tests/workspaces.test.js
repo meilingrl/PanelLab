@@ -139,3 +139,32 @@ it('Tailscale candidate prefills target without trusting and carries chosen auth
  const probeRequest=fetch.mock.calls.find(([url])=>url.endsWith('/connection/probe'))
  expect(JSON.parse(probeRequest[1].body).auth_mode).toBe('tailscale')
 })
+it.each([['password','tailscale'],['tailscale','password']])('requires explicit fresh trust when changing saved %s auth to %s',async(saved,desired)=>{
+ let savedMode=saved,probedMode
+ fetch.mockImplementation(async(url,o)=>{
+  if(url.endsWith('/connection'))return response({pinned:true,auth_mode:savedMode,fingerprint:'SHA256:fixture'})
+  if(url.endsWith('/connection/probe'))probedMode=JSON.parse(o.body).auth_mode
+  if(url.endsWith('/connection/trust'))savedMode=probedMode
+  return fixture(url,o)
+ })
+ const w=mountIt(ConnectionPanel,{server});await flushPromises()
+ await w.get('select').setValue(desired)
+ const check=w.findAll('button').find(b=>b.text().includes('检查连接'))
+ expect(check.attributes('disabled')).toBeDefined()
+ expect(w.text()).toContain('重新获取指纹')
+ await check.trigger('click');await flushPromises()
+ expect(fetch.mock.calls.some(([url])=>url.endsWith('/connection/check'))).toBe(false)
+ await w.get('[data-testid="probe"]').trigger('click');await flushPromises()
+ expect(probedMode).toBe(desired)
+ expect(fetch.mock.calls.some(([url])=>url.endsWith('/connection/trust'))).toBe(false)
+ await w.get('[data-testid="trust"]').trigger('click');await flushPromises()
+ expect(savedMode).toBe(desired)
+ expect(w.text()).toContain('已连接')
+})
+it('renders network byte values as server-level cumulative counters',async()=>{
+ const w=mountIt(TaskDetail,{task,server});await flushPromises()
+ expect(w.text()).toContain('服务器网络 · 累计计数')
+ expect(w.text()).toContain('累计接收 123 B')
+ expect(w.text()).toContain('累计发送 456 B')
+ expect(w.text()).not.toContain('B/s')
+})

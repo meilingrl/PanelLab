@@ -2,6 +2,7 @@
 import asyncio
 import json
 import shlex
+import secrets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
@@ -10,6 +11,41 @@ from services.remote_files import open_sftp, safe_path
 from services.remote_tickets import consume_ticket
 
 router = APIRouter(prefix='/api/ws', tags=['terminal'])
+
+
+TERMINAL_STARTUP_LIMIT = 64 * 1024
+
+
+def establish_shell_directory(shell, directory):
+    """Verify cwd in this PTY, consuming bounded setup/echo output before ready.
+
+    The random acknowledgement has control-byte delimiters that never occur in
+    the typed command. Echoed commands or unrelated remote text cannot match it.
+    The caller keeps the write and all reads inside the setup deadline.
+    """
+    nonce = secrets.token_hex(16)
+    quoted = shlex.quote(directory)
+    shell.sendall(
+        f'if cd -- {quoted} && [ "$(command pwd -P)" = {quoted} ]; '
+        f"then printf '\\036PANEL_CWD_%s:OK\\037' {nonce}; "
+        f"else printf '\\036PANEL_CWD_%s:FAIL\\037' {nonce}; fi\r"
+    )
+    prefix = b'\x1ePANEL_CWD_' + nonce.encode('ascii')
+    success, failure = prefix + b':OK\x1f', prefix + b':FAIL\x1f'
+    output = bytearray()
+    while True:
+        if len(output) > TERMINAL_STARTUP_LIMIT:
+            raise HTTPException(503, detail={'code': 'terminal_startup_limit', 'message': 'Terminal startup output exceeded limit.'})
+        if failure in output:
+            raise HTTPException(503, detail={'code': 'terminal_cwd_failed', 'message': 'Unable to establish requested terminal directory.'})
+        index = output.find(success)
+        if index >= 0:
+            # Preserve normal PTY output after acknowledgement, such as the prompt.
+            return bytes(output[index + len(success):])
+        chunk = shell.recv(min(4096, TERMINAL_STARTUP_LIMIT + 1 - len(output)))
+        if not chunk:
+            raise HTTPException(503, detail={'code': 'terminal_cwd_failed', 'message': 'Unable to establish requested terminal directory.'})
+        output.extend(chunk)
 
 
 @router.websocket('/terminal')
@@ -33,16 +69,17 @@ async def terminal_ws(websocket: WebSocket, ticket: str = Query(..., max_length=
                 shell = client.invoke_shell(term='xterm')
                 try:
                     shell.settimeout(10)
-                    if resolved is not None:
-                        shell.sendall('cd -- ' + shlex.quote(resolved) + '\r')
-                    return shell
+                    initial_output = establish_shell_directory(shell, resolved) if resolved is not None else b''
+                    return shell, initial_output
                 except Exception:
                     shell.close()
                     raise
 
-        channel = await asyncio.to_thread(start_shell)
+        channel, initial_output = await asyncio.to_thread(start_shell)
         await websocket.send_text(json.dumps({'type': 'panellab-terminal-ready', 'version': 1}, separators=(',', ':')))
         await websocket.send_text('Connected to trusted SSH server.\r\n')
+        if initial_output:
+            await websocket.send_text(initial_output.decode('utf-8', errors='replace'))
 
         async def ws_to_ssh():
             while True:

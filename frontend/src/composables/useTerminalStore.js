@@ -58,6 +58,7 @@ export function useTerminalStore() {
 
     return new Promise((resolve, reject) => {
       let resolved = false
+      let firstFrame = true
       try {
         const ws = new WebSocket(wsUrl)
         session.ws = ws
@@ -74,7 +75,9 @@ export function useTerminalStore() {
         ws.onmessage = (event) => {
           const data = event.data
           // Only the first protocol frame is control data. Once ready, all output is raw.
-          if (!resolved && data === JSON.stringify({ type: 'panellab-terminal-ready', version: 1 })) {
+          const isFirstFrame = firstFrame
+          firstFrame = false
+          if (isFirstFrame && !resolved && data === JSON.stringify({ type: 'panellab-terminal-ready', version: 1 })) {
             resolved = true
             clearTimeout(readinessTimeout)
             updateSessionStatus(id, 'connected', ws)

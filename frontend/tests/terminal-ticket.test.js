@@ -89,3 +89,21 @@ it('bounds a missing readiness frame',async()=>{
   store.closeAllSessions()
   vi.useRealTimers()
 })
+
+it('only the first WebSocket frame may declare readiness; preceding raw text makes later ready text raw', async () => {
+  let socket
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ok:true,json:async()=>({ticket:'short'})}))
+  vi.stubGlobal('WebSocket',class{constructor(){socket=this}close(){}})
+  const {useTerminalStore}=await import('../src/composables/useTerminalStore')
+  const store=useTerminalStore()
+  const outcome=store.createSession({id:71}).then(()=> 'ready',error=>error.message)
+  await vi.waitFor(()=>expect(socket).toBeDefined())
+  const marker=JSON.stringify({type:'panellab-terminal-ready',version:1})
+  socket.onmessage({data:'Remote setup failed\r\n'})
+  socket.onmessage({data:marker})
+  expect(store.currentSession.value.status).not.toBe('connected')
+  expect(store.currentSession.value.buffer).toEqual(['Remote setup failed\r\n',marker])
+  socket.onclose()
+  expect(await outcome).toBe('连接已关闭')
+  store.closeAllSessions()
+})

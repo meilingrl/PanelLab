@@ -1,9 +1,10 @@
 <script setup>
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { workspaceApi as api, formatTime } from '../../composables/useWorkspaceApi'
 const props=defineProps({server:{type:Object,required:true},initialAuthMode:String})
 const emit=defineEmits(['connected'])
 const info=ref(null),probe=ref(null),error=ref(''),busy=ref(false),checked=ref(null),authMode=ref('password')
+const modeChanged=computed(()=>!!info.value?.pinned&&authMode.value!==info.value.auth_mode)
 let generation=0,controller
 watch(()=>props.server.id,async id=>{
   const seq=++generation;controller?.abort();controller=new AbortController()
@@ -13,7 +14,7 @@ watch(()=>props.server.id,async id=>{
 },{immediate:true})
 onBeforeUnmount(()=>{generation++;controller?.abort()})
 async function run(action){
-  if(busy.value)return
+  if(busy.value||(action==='check'&&modeChanged.value))return
   const seq=generation;const id=props.server.id
   busy.value=true;error.value=''
   try{
@@ -38,8 +39,9 @@ async function run(action){
     <div class="ws-row ws-wrap">
       <label>认证方式 <select v-model="authMode" :disabled="busy" @change="probe=null;checked=null"><option value="password">SSH 密码</option><option value="tailscale">Tailscale SSH（none）</option></select></label>
       <button data-testid="probe" :disabled="busy" @click="run('probe')">{{ busy?'处理中…':'获取 / 更新主机指纹' }}</button>
-      <button v-if="info?.pinned" :disabled="busy" @click="run('check')">检查连接 / 重试</button>
+      <button v-if="info?.pinned" :disabled="busy||modeChanged" @click="run('check')">检查连接 / 重试</button>
     </div>
+    <p v-if="modeChanged" class="ws-notice">认证方式已改变。请重新获取指纹并明确确认信任后，才能按所选方式连接。</p>
     <div v-if="probe" class="ws-trust" role="region" aria-label="确认主机指纹">
       <strong>确认目标 {{ probe.host }}:{{ probe.port }}</strong><p>{{ probe.key_type }}</p><code class="ws-wrap">{{ probe.fingerprint }}</code>
       <p>请通过服务器控制台或管理员等独立渠道核对指纹。确认后才会保存信任并发送认证信息。</p>
