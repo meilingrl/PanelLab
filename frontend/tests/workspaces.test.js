@@ -168,3 +168,27 @@ it('renders network byte values as server-level cumulative counters',async()=>{
  expect(w.text()).toContain('累计发送 456 B')
  expect(w.text()).not.toContain('B/s')
 })
+it.each([['password','tailscale'],['tailscale','password'],[null,'password']])('retries a failed first check after saved %s -> %s trust without trusting twice',async(saved,desired)=>{
+ let savedMode=saved,probedMode,checks=0
+ fetch.mockImplementation(async(url,o)=>{
+  if(url.endsWith('/connection'))return response({configured:!!savedMode,pinned:!!savedMode,auth_mode:savedMode,fingerprint:savedMode?'SHA256:fixture':null})
+  if(url.endsWith('/connection/probe')){probedMode=JSON.parse(o.body).auth_mode;return fixture(url,o)}
+  if(url.endsWith('/connection/trust')){savedMode=probedMode;return response({fingerprint:'SHA256:fixture',auth_mode:savedMode})}
+  if(url.endsWith('/connection/check')&&++checks===1)return response({detail:{code:'connection_failed',message:'temporarily unavailable'}},false)
+  return fixture(url,o)
+ })
+ const w=mountIt(ConnectionPanel,{server});await flushPromises()
+ await w.get('select').setValue(desired)
+ await w.get('[data-testid="probe"]').trigger('click');await flushPromises()
+ await w.get('[data-testid="trust"]').trigger('click');await flushPromises()
+ expect(w.text()).toContain('temporarily unavailable')
+ const retry=w.findAll('button').find(b=>b.text().includes('检查连接'))
+ expect(retry).toBeDefined()
+ expect(retry.attributes('disabled')).toBeUndefined()
+ expect(w.find('[data-testid="trust"]').exists()).toBe(false)
+ await retry.trigger('click');await flushPromises()
+ expect(w.text()).toContain('已连接')
+ expect(w.text()).not.toContain('temporarily unavailable')
+ expect(fetch.mock.calls.filter(([url])=>url.endsWith('/connection/trust'))).toHaveLength(1)
+ expect(checks).toBe(2)
+})

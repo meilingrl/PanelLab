@@ -20,7 +20,13 @@ async function run(action){
   try{
     if(action==='probe') { const result=await api.probe(id,authMode.value);if(seq===generation)probe.value=result }
     else {
-      if(action==='trust')await api.trust(id,probe.value.token)
+      if(action==='trust'){
+        const saved=await api.trust(id,probe.value.token)
+        if(seq!==generation)return
+        // Trust is durable even if the separate authenticated check fails.
+        info.value={...info.value,configured:true,pinned:true,...saved}
+        probe.value=null
+      }
       if(seq!==generation)return
       const result=await api.check(id)
       if(seq!==generation)return
