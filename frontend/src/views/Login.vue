@@ -1,278 +1,332 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import { initTheme, getTheme, toggleTheme } from '../theme'
-import WavyLines from '../components/WavyLines.vue'
-import QRCode from 'qrcode'
+import { ref, onMounted, onUnmounted, watch } from "vue";
+import { useRouter, useRoute } from "vue-router";
+import { initTheme, getTheme, toggleTheme } from "../theme";
+import WavyLines from "../components/WavyLines.vue";
+import QRCode from "qrcode";
 
-const router = useRouter()
-const route = useRoute()
-const tab = ref('password') // 'password' | 'sms' | 'wechat' | 'qq'
-const username = ref('')
-const password = ref('')
-const phone = ref('')
-const smsCode = ref('')
-const error = ref('')
-const loading = ref(false)
-const usernameFocused = ref(false)
-const passwordFocused = ref(false)
-const phoneFocused = ref(false)
-const codeFocused = ref(false)
-const logoSrc = ref(true)
-const theme = ref(getTheme())
-const smsCountdown = ref(0)
-let smsTimer = null
+const router = useRouter();
+const route = useRoute();
+const tab = ref("password"); // 'password' | 'sms' | 'wechat' | 'qq'
+const username = ref("");
+const password = ref("");
+const phone = ref("");
+const smsCode = ref("");
+const error = ref("");
+const loading = ref(false);
+const capabilities = ref({
+  password: false,
+  register: false,
+  sms: false,
+  wechat: false,
+  qq: false,
+  demo: false,
+});
+const capabilitiesLoading = ref(true);
+const capabilitiesError = ref("");
+async function loadCapabilities() {
+  try {
+    const res = await fetch("/api/auth/capabilities");
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    for (const key of Object.keys(capabilities.value))
+      capabilities.value[key] = data[key] === true;
+  } catch (_) {
+    capabilitiesError.value = "登录能力读取失败，请刷新重试";
+  } finally {
+    capabilitiesLoading.value = false;
+  }
+}
+const usernameFocused = ref(false);
+const passwordFocused = ref(false);
+const phoneFocused = ref(false);
+const codeFocused = ref(false);
+const logoSrc = ref(true);
+const theme = ref(getTheme());
+const smsCountdown = ref(0);
+let smsTimer = null;
 
-const wechatQrDataUrl = ref('')
-const wechatState = ref('')
-const wechatMock = ref(true)
-let wechatPollTimer = null
+const wechatQrDataUrl = ref("");
+const wechatState = ref("");
+const wechatMock = ref(true);
+let wechatPollTimer = null;
 
-const qqAuthUrl = ref('')
-const qqMock = ref(true)
+const qqAuthUrl = ref("");
+const qqMock = ref(true);
 
 function parseHash() {
-  const hash = window.location.hash.slice(1) || ''
-  if (!hash) return
-  const params = new URLSearchParams(hash)
-  const token = params.get('token')
-  const err = params.get('error')
+  const hash = window.location.hash.slice(1) || "";
+  if (!hash) return;
+  const params = new URLSearchParams(hash);
+  const token = params.get("token");
+  const err = params.get("error");
   if (token) {
-    localStorage.setItem('panel_token', token)
-    window.location.hash = ''
-    router.replace(route.query.redirect || '/')
-    return
+    localStorage.setItem("panel_token", token);
+    window.location.hash = "";
+    router.replace(route.query.redirect || "/");
+    return;
   }
   if (err) {
     try {
-      error.value = decodeURIComponent(err)
+      error.value = decodeURIComponent(err);
     } catch (_) {
-      error.value = err
+      error.value = err;
     }
-    window.location.hash = ''
+    window.location.hash = "";
   }
 }
 
 onMounted(() => {
-  initTheme()
-  theme.value = getTheme()
-  parseHash()
-})
+  initTheme();
+  theme.value = getTheme();
+  parseHash();
+  loadCapabilities();
+});
 
 function onToggleTheme() {
-  theme.value = toggleTheme()
+  theme.value = toggleTheme();
 }
 
-const hasUsername = () => username.value.length > 0
-const hasPassword = () => password.value.length > 0
-const hasPhone = () => /^1\d{10}$/.test(phone.value)
-const hasCode = () => smsCode.value.length >= 6
+const hasUsername = () => username.value.length > 0;
+const hasPassword = () => password.value.length > 0;
+const hasPhone = () => /^1\d{10}$/.test(phone.value);
+const hasCode = () => smsCode.value.length >= 6;
 
 function setTokenAndRedirect(data) {
-  if (data.token) localStorage.setItem('panel_token', data.token)
-  const redirect = route.query.redirect || '/'
-  router.push(redirect)
+  if (data.token) localStorage.setItem("panel_token", data.token);
+  const redirect = route.query.redirect || "/";
+  router.push(redirect);
 }
 
 async function onSubmitPassword() {
-  error.value = ''
+  if (!capabilities.value.password || loading.value) return;
+  error.value = "";
   if (!username.value.trim() || !password.value) {
-    error.value = '请输入用户名和密码'
-    return
+    error.value = "请输入用户名和密码";
+    return;
   }
-  loading.value = true
+  loading.value = true;
   try {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username.value.trim(), password: password.value }),
-    })
-    const data = await res.json().catch(() => ({}))
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: username.value.trim(),
+        password: password.value,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      error.value = data.detail || data.message || '用户名或密码错误'
-      return
+      error.value = data.detail || data.message || "用户名或密码错误";
+      return;
     }
-    setTokenAndRedirect(data)
+    setTokenAndRedirect(data);
   } catch (e) {
-    error.value = '网络错误，请稍后重试'
+    error.value = "网络错误，请稍后重试";
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function onSendSms() {
-  error.value = ''
-  const p = phone.value.trim()
+  if (!capabilities.value.sms || loading.value) return;
+  error.value = "";
+  const p = phone.value.trim();
   if (!/^1\d{10}$/.test(p)) {
-    error.value = '请输入正确的11位手机号'
-    return
+    error.value = "请输入正确的11位手机号";
+    return;
   }
-  loading.value = true
+  loading.value = true;
   try {
-    const res = await fetch('/api/auth/sms/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch("/api/auth/sms/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone: p }),
-    })
-    const data = await res.json().catch(() => ({}))
+    });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      error.value = data.detail || data.message || '发送失败'
-      return
+      error.value = data.detail || data.message || "发送失败";
+      return;
     }
-    smsCountdown.value = 60
+    smsCountdown.value = 60;
     smsTimer = setInterval(() => {
-      smsCountdown.value--
+      smsCountdown.value--;
       if (smsCountdown.value <= 0 && smsTimer) {
-        clearInterval(smsTimer)
-        smsTimer = null
+        clearInterval(smsTimer);
+        smsTimer = null;
       }
-    }, 1000)
+    }, 1000);
   } catch (e) {
-    error.value = '网络错误，请稍后重试'
+    error.value = "网络错误，请稍后重试";
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function onSubmitSms() {
-  error.value = ''
-  const p = phone.value.trim()
+  if (!capabilities.value.sms || loading.value) return;
+  error.value = "";
+  const p = phone.value.trim();
   if (!/^1\d{10}$/.test(p)) {
-    error.value = '请输入正确的11位手机号'
-    return
+    error.value = "请输入正确的11位手机号";
+    return;
   }
   if (smsCode.value.length !== 6) {
-    error.value = '请输入6位验证码'
-    return
+    error.value = "请输入6位验证码";
+    return;
   }
-  loading.value = true
+  loading.value = true;
   try {
-    const res = await fetch('/api/auth/sms/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch("/api/auth/sms/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone: p, code: smsCode.value }),
-    })
-    const data = await res.json().catch(() => ({}))
+    });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      error.value = data.detail || data.message || '验证码错误或已过期'
-      return
+      error.value = data.detail || data.message || "验证码错误或已过期";
+      return;
     }
-    setTokenAndRedirect(data)
+    setTokenAndRedirect(data);
   } catch (e) {
-    error.value = '网络错误，请稍后重试'
+    error.value = "网络错误，请稍后重试";
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function loadWechatQr() {
-  wechatQrDataUrl.value = ''
-  wechatState.value = ''
-  wechatMock.value = true
+  wechatQrDataUrl.value = "";
+  wechatState.value = "";
+  wechatMock.value = true;
   if (wechatPollTimer) {
-    clearInterval(wechatPollTimer)
-    wechatPollTimer = null
+    clearInterval(wechatPollTimer);
+    wechatPollTimer = null;
   }
   try {
-    const res = await fetch('/api/auth/wechat/qr')
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) return
-    wechatMock.value = !!data.mock
-    wechatState.value = data.state || ''
+    const res = await fetch("/api/auth/wechat/qr");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    wechatMock.value = !!data.mock;
+    wechatState.value = data.state || "";
     if (!data.mock && data.qr_url) {
-      wechatQrDataUrl.value = await QRCode.toDataURL(data.qr_url, { width: 220, margin: 1 })
-      if (wechatState.value) wechatStartPoll()
+      wechatQrDataUrl.value = await QRCode.toDataURL(data.qr_url, {
+        width: 220,
+        margin: 1,
+      });
+      if (wechatState.value) wechatStartPoll();
     }
   } catch (_) {}
 }
 
 function wechatStartPoll() {
-  if (wechatPollTimer) return
+  if (wechatPollTimer) return;
   wechatPollTimer = setInterval(async () => {
-    if (!wechatState.value) return
+    if (!wechatState.value) return;
     try {
-      const r = await fetch(`/api/auth/wechat/poll?state=${encodeURIComponent(wechatState.value)}`)
-      if (r.status !== 200) return
-      const data = await r.json().catch(() => ({}))
+      const r = await fetch(
+        `/api/auth/wechat/poll?state=${encodeURIComponent(wechatState.value)}`,
+      );
+      if (r.status !== 200) return;
+      const data = await r.json().catch(() => ({}));
       if (wechatPollTimer) {
-        clearInterval(wechatPollTimer)
-        wechatPollTimer = null
+        clearInterval(wechatPollTimer);
+        wechatPollTimer = null;
       }
-      if (data.token) setTokenAndRedirect(data)
+      if (data.token) setTokenAndRedirect(data);
     } catch (_) {}
-  }, 2000)
+  }, 2000);
 }
 
 async function onWechatMockLogin() {
-  error.value = ''
-  loading.value = true
+  if (!capabilities.value.wechat || loading.value || !capabilities.value.demo)
+    return;
+  error.value = "";
+  loading.value = true;
   try {
-    const res = await fetch('/api/auth/wechat/callback', { method: 'POST' })
-    const data = await res.json().catch(() => ({}))
+    const res = await fetch("/api/auth/wechat/callback", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      error.value = data.detail || data.message || '登录失败'
-      return
+      error.value = data.detail || data.message || "登录失败";
+      return;
     }
-    setTokenAndRedirect(data)
+    setTokenAndRedirect(data);
   } catch (e) {
-    error.value = '网络错误，请稍后重试'
+    error.value = "网络错误，请稍后重试";
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function loadQqUrl() {
-  qqAuthUrl.value = ''
-  qqMock.value = true
+  qqAuthUrl.value = "";
+  qqMock.value = true;
   try {
-    const res = await fetch('/api/auth/qq/url')
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) return
-    qqMock.value = !!data.mock
-    if (!data.mock && data.auth_url) qqAuthUrl.value = data.auth_url
+    const res = await fetch("/api/auth/qq/url");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    qqMock.value = !!data.mock;
+    if (!data.mock && data.auth_url) qqAuthUrl.value = data.auth_url;
   } catch (_) {}
 }
 
 function onQqLogin() {
-  if (qqAuthUrl.value) window.location.href = qqAuthUrl.value
+  if (qqAuthUrl.value) window.location.href = qqAuthUrl.value;
 }
 
 async function onQqMockLogin() {
-  error.value = ''
-  loading.value = true
+  if (!capabilities.value.qq || loading.value || !capabilities.value.demo)
+    return;
+  error.value = "";
+  loading.value = true;
   try {
-    const res = await fetch('/api/auth/qq/callback', { method: 'POST' })
-    const data = await res.json().catch(() => ({}))
+    const res = await fetch("/api/auth/qq/callback", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      error.value = data.detail || data.message || '登录失败'
-      return
+      error.value = data.detail || data.message || "登录失败";
+      return;
     }
-    setTokenAndRedirect(data)
+    setTokenAndRedirect(data);
   } catch (e) {
-    error.value = '网络错误，请稍后重试'
+    error.value = "网络错误，请稍后重试";
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 watch(tab, (t) => {
-  if (t === 'wechat') loadWechatQr()
-  if (t === 'qq') loadQqUrl()
-})
+  if (t === "wechat") loadWechatQr();
+  if (t === "qq") loadQqUrl();
+});
+onUnmounted(() => {
+  clearInterval(smsTimer);
+  clearInterval(wechatPollTimer);
+});
 </script>
 
 <template>
   <div class="login">
     <WavyLines />
-    <button type="button" class="theme-toggle" :aria-label="theme === 'light' ? '切换深色' : '切换浅色'" @click="onToggleTheme">
-      {{ theme === 'light' ? '🌙' : '☀️' }}
+    <button
+      type="button"
+      class="theme-toggle"
+      :aria-label="theme === 'light' ? '切换深色' : '切换浅色'"
+      @click="onToggleTheme"
+    >
+      {{ theme === "light" ? "🌙" : "☀️" }}
     </button>
 
     <div class="login-card">
       <!-- 左侧：Logo + 品牌 -->
       <div class="login-left">
         <div class="brand">
-          <img v-if="logoSrc" src="/panellab-logo.png" alt="PanelLab" class="logo-img" @error="logoSrc = false" />
+          <img
+            v-if="logoSrc"
+            src="/panellab-logo.png"
+            alt="PanelLab"
+            class="logo-img"
+            @error="logoSrc = false"
+          />
           <div v-else class="logo-fallback">P</div>
           <h1 class="brand-name">PanelLab</h1>
           <p class="brand-desc">服务器运维管理面板</p>
@@ -283,15 +337,63 @@ watch(tab, (t) => {
       <div class="login-right">
         <div class="form-card">
           <h2 class="form-title">登录</h2>
+          <p v-if="capabilitiesLoading" role="status">正在读取登录能力…</p>
+          <p v-if="capabilitiesError" role="alert" class="error-msg">
+            {{ capabilitiesError }}
+          </p>
           <div class="tabs">
-            <button type="button" :class="{ active: tab === 'password' }" @click="tab = 'password'; error = ''">账号密码</button>
-            <button type="button" :class="{ active: tab === 'sms' }" @click="tab = 'sms'; error = ''">手机验证码</button>
-            <button type="button" :class="{ active: tab === 'wechat' }" @click="tab = 'wechat'; error = ''">微信</button>
-            <button type="button" :class="{ active: tab === 'qq' }" @click="tab = 'qq'; error = ''">QQ</button>
+            <button
+              type="button"
+              v-if="capabilities.password"
+              :class="{ active: tab === 'password' }"
+              @click="
+                tab = 'password';
+                error = '';
+              "
+            >
+              账号密码
+            </button>
+            <button
+              type="button"
+              v-if="capabilities.sms"
+              :class="{ active: tab === 'sms' }"
+              @click="
+                tab = 'sms';
+                error = '';
+              "
+            >
+              手机验证码
+            </button>
+            <button
+              type="button"
+              v-if="capabilities.wechat"
+              :class="{ active: tab === 'wechat' }"
+              @click="
+                tab = 'wechat';
+                error = '';
+              "
+            >
+              微信
+            </button>
+            <button
+              type="button"
+              v-if="capabilities.qq"
+              :class="{ active: tab === 'qq' }"
+              @click="
+                tab = 'qq';
+                error = '';
+              "
+            >
+              QQ
+            </button>
           </div>
 
           <!-- 账号密码 -->
-          <form v-show="tab === 'password'" @submit.prevent="onSubmitPassword" class="form">
+          <form
+            v-if="capabilities.password && tab === 'password'"
+            @submit.prevent="onSubmitPassword"
+            class="form"
+          >
             <div class="field">
               <input
                 id="username"
@@ -301,7 +403,11 @@ watch(tab, (t) => {
                 @focus="usernameFocused = true"
                 @blur="usernameFocused = false"
               />
-              <label for="username" :class="{ float: usernameFocused || hasUsername() }">用户名</label>
+              <label
+                for="username"
+                :class="{ float: usernameFocused || hasUsername() }"
+                >用户名</label
+              >
             </div>
             <div class="field">
               <input
@@ -312,19 +418,27 @@ watch(tab, (t) => {
                 @focus="passwordFocused = true"
                 @blur="passwordFocused = false"
               />
-              <label for="password" :class="{ float: passwordFocused || hasPassword() }">密码</label>
+              <label
+                for="password"
+                :class="{ float: passwordFocused || hasPassword() }"
+                >密码</label
+              >
             </div>
             <p v-if="error" class="error-msg">{{ error }}</p>
             <button type="submit" class="btn-login" :disabled="loading">
-              {{ loading ? '登录中…' : '登录' }}
+              {{ loading ? "登录中…" : "登录" }}
             </button>
-            <p class="switch-link">
+            <p v-if="capabilities.register" class="switch-link">
               没有账号？<router-link to="/register">注册</router-link>
             </p>
           </form>
 
           <!-- 手机验证码 -->
-          <form v-show="tab === 'sms'" @submit.prevent="onSubmitSms" class="form">
+          <form
+            v-if="capabilities.sms && tab === 'sms'"
+            @submit.prevent="onSubmitSms"
+            class="form"
+          >
             <div class="field">
               <input
                 id="phone"
@@ -336,7 +450,9 @@ watch(tab, (t) => {
                 @focus="phoneFocused = true"
                 @blur="phoneFocused = false"
               />
-              <label for="phone" :class="{ float: phoneFocused || hasPhone() }">手机号</label>
+              <label for="phone" :class="{ float: phoneFocused || hasPhone() }"
+                >手机号</label
+              >
             </div>
             <div class="field row">
               <input
@@ -350,39 +466,78 @@ watch(tab, (t) => {
                 @focus="codeFocused = true"
                 @blur="codeFocused = false"
               />
-              <label for="smsCode" :class="{ float: codeFocused || hasCode() }">验证码</label>
-              <button type="button" class="btn-sms" :disabled="smsCountdown > 0 || loading" @click="onSendSms">
-                {{ smsCountdown > 0 ? `${smsCountdown}s 后重发` : '获取验证码' }}
+              <label for="smsCode" :class="{ float: codeFocused || hasCode() }"
+                >验证码</label
+              >
+              <button
+                type="button"
+                class="btn-sms"
+                :disabled="smsCountdown > 0 || loading"
+                @click="onSendSms"
+              >
+                {{
+                  smsCountdown > 0 ? `${smsCountdown}s 后重发` : "获取验证码"
+                }}
               </button>
             </div>
             <p v-if="error" class="error-msg">{{ error }}</p>
             <button type="submit" class="btn-login" :disabled="loading">
-              {{ loading ? '登录中…' : '登录' }}
+              {{ loading ? "登录中…" : "登录" }}
             </button>
           </form>
 
           <!-- 微信扫码：已配置则展示二维码 + 轮询，未配置则模拟扫码 -->
-          <div v-show="tab === 'wechat'" class="form">
-            <p v-if="wechatMock" class="third-desc">开发环境使用模拟扫码，点击下方按钮登录。</p>
-            <p v-else class="third-desc">请使用微信扫描下方二维码登录。</p>
+          <div v-if="capabilities.wechat && tab === 'wechat'" class="form">
+            <p v-if="wechatMock && capabilities.demo" class="third-desc">
+              开发环境使用模拟扫码，点击下方按钮登录。
+            </p>
+            <p v-else-if="!wechatMock" class="third-desc">
+              请使用微信扫描下方二维码登录。
+            </p>
             <div v-if="!wechatMock && wechatQrDataUrl" class="qrcode-wrap">
-              <img :src="wechatQrDataUrl" alt="微信登录二维码" class="qrcode-img" />
+              <img
+                :src="wechatQrDataUrl"
+                alt="微信登录二维码"
+                class="qrcode-img"
+              />
             </div>
             <p v-if="error" class="error-msg">{{ error }}</p>
-            <button v-if="wechatMock" type="button" class="btn-login" :disabled="loading" @click="onWechatMockLogin">
-              {{ loading ? '登录中…' : '模拟微信扫码登录' }}
+            <button
+              v-if="wechatMock && capabilities.demo"
+              type="button"
+              class="btn-login"
+              :disabled="loading"
+              @click="onWechatMockLogin"
+            >
+              {{ loading ? "登录中…" : "模拟微信扫码登录" }}
             </button>
           </div>
 
           <!-- QQ：已配置则跳转 QQ 授权，未配置则模拟扫码 -->
-          <div v-show="tab === 'qq'" class="form">
-            <p v-if="qqMock" class="third-desc">开发环境使用模拟扫码，点击下方按钮登录。</p>
-            <p v-else class="third-desc">点击下方按钮使用 QQ 授权登录。</p>
+          <div v-if="capabilities.qq && tab === 'qq'" class="form">
+            <p v-if="qqMock && capabilities.demo" class="third-desc">
+              开发环境使用模拟扫码，点击下方按钮登录。
+            </p>
+            <p v-else-if="!qqMock" class="third-desc">
+              点击下方按钮使用 QQ 授权登录。
+            </p>
             <p v-if="error" class="error-msg">{{ error }}</p>
-            <button v-if="qqMock" type="button" class="btn-login" :disabled="loading" @click="onQqMockLogin">
-              {{ loading ? '登录中…' : '模拟 QQ 扫码登录' }}
+            <button
+              v-if="qqMock && capabilities.demo"
+              type="button"
+              class="btn-login"
+              :disabled="loading"
+              @click="onQqMockLogin"
+            >
+              {{ loading ? "登录中…" : "模拟 QQ 扫码登录" }}
             </button>
-            <button v-else type="button" class="btn-login" :disabled="loading" @click="onQqLogin">
+            <button
+              v-else-if="!qqMock"
+              type="button"
+              class="btn-login"
+              :disabled="loading"
+              @click="onQqLogin"
+            >
               使用 QQ 登录
             </button>
           </div>
@@ -416,7 +571,9 @@ watch(tab, (t) => {
   border-radius: 8px;
   color: var(--text-primary);
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
+  transition:
+    background 0.2s,
+    border-color 0.2s;
 }
 
 .theme-toggle:hover {
@@ -527,7 +684,10 @@ watch(tab, (t) => {
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
-  transition: color 0.2s, background 0.2s, border-color 0.2s;
+  transition:
+    color 0.2s,
+    background 0.2s,
+    border-color 0.2s;
 }
 
 .tabs button:hover {
@@ -612,7 +772,9 @@ watch(tab, (t) => {
   border: 1px solid var(--border);
   border-radius: 8px;
   outline: none;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
   box-sizing: border-box;
 }
 
@@ -629,7 +791,10 @@ watch(tab, (t) => {
   font-size: 1rem;
   color: var(--text-muted);
   pointer-events: none;
-  transition: top 0.2s, font-size 0.2s, color 0.2s;
+  transition:
+    top 0.2s,
+    font-size 0.2s,
+    color 0.2s;
 }
 
 .field label.float {

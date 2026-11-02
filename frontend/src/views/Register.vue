@@ -1,81 +1,98 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import { initTheme, getTheme, toggleTheme } from '../theme'
-import WavyLines from '../components/WavyLines.vue'
+import { ref, onMounted } from "vue";
+import { useRouter, useRoute } from "vue-router";
+import { initTheme, getTheme, toggleTheme } from "../theme";
+import WavyLines from "../components/WavyLines.vue";
 
-const router = useRouter()
-const route = useRoute()
-const username = ref('')
-const password = ref('')
-const confirmPassword = ref('')
-const error = ref('')
-const loading = ref(false)
-const usernameFocused = ref(false)
-const passwordFocused = ref(false)
-const confirmFocused = ref(false)
-const theme = ref(getTheme())
+const router = useRouter();
+const route = useRoute();
+const username = ref("");
+const password = ref("");
+const confirmPassword = ref("");
+const error = ref("");
+const loading = ref(false);
+const registrationAllowed = ref(false);
+const capabilitiesLoading = ref(true);
+const capabilitiesError = ref("");
+async function loadCapabilities() {
+  try {
+    const res = await fetch("/api/auth/capabilities");
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    registrationAllowed.value = data.register === true;
+  } catch (_) {
+    capabilitiesError.value = "登录能力读取失败，请刷新重试";
+  } finally {
+    capabilitiesLoading.value = false;
+  }
+}
+const usernameFocused = ref(false);
+const passwordFocused = ref(false);
+const confirmFocused = ref(false);
+const theme = ref(getTheme());
 
 onMounted(() => {
-  initTheme()
-  theme.value = getTheme()
-})
+  initTheme();
+  theme.value = getTheme();
+  loadCapabilities();
+});
 
 function onToggleTheme() {
-  theme.value = toggleTheme()
+  theme.value = toggleTheme();
 }
 
-const hasUsername = () => username.value.length > 0
-const hasPassword = () => password.value.length > 0
-const hasConfirm = () => confirmPassword.value.length > 0
+const hasUsername = () => username.value.length > 0;
+const hasPassword = () => password.value.length > 0;
+const hasConfirm = () => confirmPassword.value.length > 0;
 
 async function onSubmit() {
-  error.value = ''
-  const u = username.value.trim()
+  if (!registrationAllowed.value || loading.value) return;
+  error.value = "";
+  const u = username.value.trim();
   if (!u) {
-    error.value = '请输入用户名'
-    return
+    error.value = "请输入用户名";
+    return;
   }
   if (u.length < 2) {
-    error.value = '用户名至少 2 个字符'
-    return
+    error.value = "用户名至少 2 个字符";
+    return;
   }
   if (!password.value) {
-    error.value = '请输入密码'
-    return
+    error.value = "请输入密码";
+    return;
   }
   if (password.value.length < 6) {
-    error.value = '密码至少 6 位'
-    return
+    error.value = "密码至少 6 位";
+    return;
   }
   if (password.value !== confirmPassword.value) {
-    error.value = '两次输入的密码不一致'
-    return
+    error.value = "两次输入的密码不一致";
+    return;
   }
-  loading.value = true
+  loading.value = true;
   try {
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         username: u,
         password: password.value,
       }),
-    })
-    const data = await res.json().catch(() => ({}))
+    });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      error.value = data.detail || data.message || '注册失败'
-      return
+      error.value = data.detail || data.message || "注册失败";
+      return;
     }
     if (data.token) {
-      localStorage.setItem('panel_token', data.token)
+      localStorage.setItem("panel_token", data.token);
     }
-    const redirect = route.query.redirect || '/'
-    router.push(redirect)
+    const redirect = route.query.redirect || "/";
+    router.push(redirect);
   } catch (e) {
-    error.value = '网络错误，请稍后重试'
+    error.value = "网络错误，请稍后重试";
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 </script>
@@ -83,8 +100,13 @@ async function onSubmit() {
 <template>
   <div class="register">
     <WavyLines />
-    <button type="button" class="theme-toggle" :aria-label="theme === 'light' ? '切换深色' : '切换浅色'" @click="onToggleTheme">
-      {{ theme === 'light' ? '🌙' : '☀️' }}
+    <button
+      type="button"
+      class="theme-toggle"
+      :aria-label="theme === 'light' ? '切换深色' : '切换浅色'"
+      @click="onToggleTheme"
+    >
+      {{ theme === "light" ? "🌙" : "☀️" }}
     </button>
 
     <div class="login-card">
@@ -99,7 +121,15 @@ async function onSubmit() {
       <div class="login-right">
         <div class="form-card">
           <h2 class="form-title">注册</h2>
-          <form @submit.prevent="onSubmit" class="form">
+          <p v-if="capabilitiesLoading" role="status">正在读取登录能力…</p>
+          <div v-else-if="!registrationAllowed" role="status">
+            <p v-if="capabilitiesError" class="error-msg" role="alert">
+              {{ capabilitiesError }}
+            </p>
+            <p v-else>注册已关闭，请联系面板管理员获取账号。</p>
+            <router-link to="/login">返回登录</router-link>
+          </div>
+          <form v-else @submit.prevent="onSubmit" class="form">
             <div class="field">
               <input
                 id="username"
@@ -109,7 +139,11 @@ async function onSubmit() {
                 @focus="usernameFocused = true"
                 @blur="usernameFocused = false"
               />
-              <label for="username" :class="{ float: usernameFocused || hasUsername() }">用户名（至少 2 位）</label>
+              <label
+                for="username"
+                :class="{ float: usernameFocused || hasUsername() }"
+                >用户名（至少 2 位）</label
+              >
             </div>
             <div class="field">
               <input
@@ -120,7 +154,11 @@ async function onSubmit() {
                 @focus="passwordFocused = true"
                 @blur="passwordFocused = false"
               />
-              <label for="password" :class="{ float: passwordFocused || hasPassword() }">密码（至少 6 位）</label>
+              <label
+                for="password"
+                :class="{ float: passwordFocused || hasPassword() }"
+                >密码（至少 6 位）</label
+              >
             </div>
             <div class="field">
               <input
@@ -131,11 +169,15 @@ async function onSubmit() {
                 @focus="confirmFocused = true"
                 @blur="confirmFocused = false"
               />
-              <label for="confirmPassword" :class="{ float: confirmFocused || hasConfirm() }">确认密码</label>
+              <label
+                for="confirmPassword"
+                :class="{ float: confirmFocused || hasConfirm() }"
+                >确认密码</label
+              >
             </div>
             <p v-if="error" class="error-msg">{{ error }}</p>
             <button type="submit" class="btn-login" :disabled="loading">
-              {{ loading ? '注册中…' : '注册' }}
+              {{ loading ? "注册中…" : "注册" }}
             </button>
             <p class="switch-link">
               已有账号？<router-link to="/login">去登录</router-link>
@@ -269,7 +311,9 @@ async function onSubmit() {
   border: 1px solid var(--border);
   border-radius: 8px;
   outline: none;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
   box-sizing: border-box;
 }
 
@@ -286,7 +330,10 @@ async function onSubmit() {
   font-size: 1rem;
   color: var(--text-muted);
   pointer-events: none;
-  transition: top 0.2s, font-size 0.2s, color 0.2s;
+  transition:
+    top 0.2s,
+    font-size 0.2s,
+    color 0.2s;
 }
 
 .field label.float {
@@ -335,5 +382,25 @@ async function onSubmit() {
 
 .switch-link a:hover {
   text-decoration: underline;
+}
+@media (max-width: 700px) {
+  .register {
+    padding: 1rem;
+  }
+  .login-card {
+    flex-direction: column;
+  }
+  .login-left {
+    padding: 1rem;
+  }
+  .brand {
+    padding: 0.5rem;
+  }
+  .login-right {
+    width: auto;
+    padding: 1.5rem;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
 }
 </style>
