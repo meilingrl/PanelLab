@@ -35,3 +35,18 @@ def check(server_id: int, db: DB, user: Owner):
             sftp.get_channel().settimeout(connection.CONNECT_TIMEOUT)
             home = sftp.normalize('.')
     return {'ok': True, 'home': home, 'observed_at': connection.observed_at()}
+
+
+@router.get('/servers/{server_id}/snapshot')
+def snapshot(server_id: int, db: DB, user: Owner):
+    from services.remote_probe import collect_snapshot
+    with connection.open_remote(db, user, server_id) as client:
+        return collect_snapshot(client)
+
+
+@router.get('/servers/{server_id}/files')
+def files(server_id: int, db: DB, user: Owner, path: str | None = None):
+    from services.remote_files import open_sftp, list_directory
+    with connection.open_remote(db, user, server_id) as client:
+        with open_sftp(client) as sftp:
+            return list_directory(sftp, path)
