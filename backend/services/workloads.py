@@ -100,3 +100,36 @@ def observation(db, user, row):
                 warnings.append('Log file is unavailable')
     return {'workload_id':row.id,'observed_at':snapshot['observed_at'],'process_status':status,
             'process':process,'system':snapshot['system'],'log':log,'warnings':warnings}
+
+
+def files(db, user, row, path):
+    path = contained(path or row.root_path, row.root_path)
+    with connection.open_remote(db, user, row.server_id) as client:
+        with remote_files.open_sftp(client) as sftp, file_errors():
+            return remote_files.list_directory(sftp, path, root=row.root_path)
+
+
+def read_file(db, user, row, path, *, download=False):
+    path = contained(path, row.root_path)
+    limit = DOWNLOAD_LIMIT if download else TEXT_LIMIT
+    with connection.open_remote(db, user, row.server_id) as client:
+        with remote_files.open_sftp(client) as sftp, file_errors():
+            path = remote_files.safe_path(sftp, path, root=row.root_path, kind='file')
+            with sftp.open(path, 'rb') as stream:
+                before = stream.stat()
+                if not stat.S_ISREG(before.st_mode or 0): fail('invalid_file_type', 'Expected a regular file', 403)
+                if before.st_size is None or before.st_size < 0: fail('file_size_unavailable', 'File size unavailable', 503)
+                if download and before.st_size > limit: fail('file_too_large', 'Download exceeds 16 MiB', 413)
+                offset = 0 if download else max(0, before.st_size-limit)
+                stream.seek(offset)
+                # Read at most one extra byte to detect growth, never stream without a bound.
+                data = stream.read(limit+1)
+                after = stream.stat()
+                if not stat.S_ISREG(after.st_mode or 0): fail('file_changed', 'File changed during read', 409)
+                if download and (len(data)>limit or after.st_size>limit): fail('file_too_large', 'Download exceeds 16 MiB', 413)
+                changed = (before.st_size, before.st_mtime) != (after.st_size, after.st_mtime) or len(data) != min(limit+1, max(0,before.st_size-offset))
+                # Revalidate the named path after reading; SFTP cannot make this atomic.
+                remote_files.safe_path(sftp,path,root=row.root_path,kind='file')
+                metadata = {'path':path,'truncated':offset>0 or len(data)>limit,'size':after.st_size,
+                            'modified_at':after.st_mtime,'changed_during_read':changed}
+                return data[:limit], metadata

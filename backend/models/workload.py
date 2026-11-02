@@ -23,3 +23,20 @@ class Workload(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    runs: Mapped[list['ReportedRun']] = relationship(back_populates='workload', cascade='all, delete-orphan')
+
+
+class ReportedRun(Base):
+    __tablename__ = 'reported_runs'
+    id: Mapped[int] = mapped_column(ID, primary_key=True, autoincrement=True)
+    workload_id: Mapped[int] = mapped_column(ID, ForeignKey('workloads.id', ondelete='CASCADE'), index=True)
+    reported_by: Mapped[int] = mapped_column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'))
+    source: Mapped[str] = mapped_column(String(20), default='reported')
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20))
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    workload: Mapped[Workload] = relationship(back_populates='runs')

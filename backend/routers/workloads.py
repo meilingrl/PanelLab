@@ -7,9 +7,9 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User
-from models.workload import Workload
+from models.workload import Workload, ReportedRun
 from routers.auth import get_current_user
-from schemas.workloads import WorkloadCreate, WorkloadPatch
+from schemas.workloads import WorkloadCreate, WorkloadPatch, RunCreate
 from services import workloads as service
 
 router = APIRouter(prefix='/api/workloads', tags=['workloads'])
@@ -64,3 +64,50 @@ def remove(workload_id: int, db: DB, user: Owner):
 @router.get('/{workload_id}/observation')
 def observation(workload_id: int, db: DB, user: Owner):
     return service.observation(db,user,service.owned(db,user,workload_id))
+
+
+@router.get('/{workload_id}/files')
+def files(workload_id: int, db: DB, user: Owner, path: str | None = None):
+    return service.files(db,user,service.owned(db,user,workload_id),path)
+
+
+@router.get('/{workload_id}/text')
+def text(workload_id: int, db: DB, user: Owner, path: str):
+    row = service.owned(db,user,workload_id)
+    data, metadata = service.read_file(db,user,row,path)
+    return {**metadata,'text':data.decode('utf-8',errors='replace')}
+
+
+@router.get('/{workload_id}/download')
+def download(workload_id: int, db: DB, user: Owner, path: str):
+    row = service.owned(db,user,workload_id)
+    data, metadata = service.read_file(db,user,row,path,download=True)
+    filename = quote(posixpath.basename(metadata['path']),safe='')
+    return Response(data,media_type='application/octet-stream',headers={
+        'Content-Disposition':"attachment; filename*=UTF-8''"+filename,
+        'X-File-Changed-During-Read':str(metadata['changed_during_read']).lower(),
+        'X-File-Size':str(metadata['size'])})
+
+
+@router.get('/{workload_id}/runs')
+def runs(workload_id: int, db: DB, user: Owner, before_id: int | None = Query(None,gt=0), limit: int = Query(20,ge=1,le=50)):
+    service.owned(db,user,workload_id)
+    query = db.query(ReportedRun).filter(ReportedRun.workload_id==workload_id)
+    if before_id is not None: query = query.filter(ReportedRun.id<before_id)
+    rows = query.order_by(ReportedRun.id.desc()).limit(limit).all()
+    return {'items':[service.serialize(r) for r in rows]}
+
+
+@router.post('/{workload_id}/runs')
+def report(workload_id: int, body: RunCreate, db: DB, user: Owner):
+    row = service.owned(db,user,workload_id)
+    if body.artifact_path is not None: service.contained(body.artifact_path,row.root_path)
+    values = body.model_dump()
+    # MySQL and SQLite store UTC without a timezone; serialize explicitly as UTC.
+    for key in ('started_at','finished_at'):
+        if values[key] is not None: values[key] = values[key].replace(tzinfo=None)
+    run = ReportedRun(workload_id=row.id,reported_by=user.id,source='reported',**values)
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return service.serialize(run)

@@ -97,6 +97,47 @@ def test_invalid_metadata_rejected(workspace,fields):
     payload.update(fields)
     assert client.post('/api/workloads',json=payload).status_code in (403,422)
 
+def test_file_confinement_regular_only_and_bounded_tail_download(workspace):
+    client,sftp,_ = workspace
+    task = create(workspace)
+    base = f'/api/workloads/{task}'
+    assert client.get(base+'/files').json()['cwd'] == ROOT
+    for path in ('/outside/key',ROOT+'/../key',ROOT+'/link/key',ROOT+'/fifo'):
+        assert client.get(base+'/text',params={'path':path}).status_code == 403
+    assert client.get(base+'/text',params={'path':ROOT+'/missing'}).status_code == 404
+    sftp.data[LOG] = b'a'*70000 + b'END'
+    tail = client.get(base+'/text',params={'path':LOG}).json()
+    assert len(tail['text'].encode()) == 65536
+    assert tail['text'].endswith('END') and tail['truncated']
+    download = client.get(base+'/download',params={'path':LOG})
+    assert download.content == sftp.data[LOG]
+    assert "filename*=UTF-8''" in download.headers['content-disposition']
+    sftp.data[LOG] = b'a'*(16*1024*1024+1)
+    assert client.get(base+'/download',params={'path':LOG}).status_code == 413
+
+def test_reported_runs_status_time_cursor_and_cascade(workspace):
+    client,_,state = workspace
+    task = create(workspace)
+    base = f'/api/workloads/{task}/runs'
+    body = {'started_at':'2026-11-03T00:00:00+08:00','finished_at':'2026-11-03T00:01:00+08:00','status':'succeeded','exit_code':0,'summary':'reported by test'}
+    first = client.post(base,json=body)
+    assert first.status_code == 200,first.text
+    assert first.json()['source'] == 'reported' and first.json()['reported_by'] == 1
+    second = client.post(base,json={**body,'status':'failed','exit_code':0})
+    assert second.status_code == 200
+    assert client.get(base,params={'limit':1}).json()['items'][0]['id'] == second.json()['id']
+    assert client.get(base,params={'before_id':second.json()['id']}).json()['items'][0]['id'] == first.json()['id']
+    for change in ({'started_at':'2026-11-03T00:00:00'},{'finished_at':'2026-11-02T00:00:00Z'},{'status':'running'},{'status':'succeeded','finished_at':None},{'source':'observed'},{'artifact_path':'/outside/file'}):
+        assert client.post(base,json={**body,**change}).status_code in (403,422)
+    assert client.get(base,params={'limit':51}).status_code == 422
+    state['offline'] = True
+    assert client.post(base,json=body).status_code == 200
+    assert client.delete(f'/api/workloads/{task}').status_code == 200
+    from models.workload import ReportedRun
+    with SessionLocal() as db: assert db.query(ReportedRun).count() == 0
+    assert client.delete('/api/servers/71').status_code == 200
+
+
 def test_zombie_and_stopped_process_are_not_running(workspace,monkeypatch):
     client,_,_ = workspace
     task = create(workspace,pid=999,process_identity='boot:99')
@@ -127,6 +168,25 @@ def test_cross_owner_creation_and_rebinding_do_not_connect(workspace):
     state['offline'] = True
     assert client.patch(f'/api/workloads/{task}',json={'root_path':'/new','log_path':None}).status_code == 503
     assert client.get(f'/api/workloads/{task}').json()['root_path'] == ROOT
+
+
+def test_read_growth_is_bounded_and_reported(workspace,monkeypatch):
+    client,sftp,_ = workspace
+    task = create(workspace)
+    class Growing(RemoteFile):
+        def read(self,n):
+            assert 0 < n <= 16*1024*1024+1
+            position = self.tell()
+            self.seek(0,2)
+            self.write(b'grown')
+            self.seek(position)
+            return super().read(n)
+    monkeypatch.setattr(sftp,'open',lambda path,mode:Growing(sftp.data[path]))
+    result = client.get(f'/api/workloads/{task}/text',params={'path':LOG})
+    assert result.status_code == 200
+    assert result.json()['changed_during_read'] is True
+    download = client.get(f'/api/workloads/{task}/download',params={'path':LOG})
+    assert download.headers['x-file-changed-during-read'] == 'true'
 
 
 def test_bound_unavailable_creation_and_log_missing_unbound(workspace):

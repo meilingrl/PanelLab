@@ -67,3 +67,34 @@ class WorkloadPatch(BaseModel):
     website_url: str | None = None
     schedule_note: str | None = None
     notes: str | None = None
+
+
+class RunCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    started_at: datetime
+    finished_at: datetime | None = None
+    status: Literal['running', 'succeeded', 'failed']
+    exit_code: int | None = Field(None, ge=-2147483648, le=2147483647)
+    summary: str | None = Field(None, max_length=2000)
+    artifact_path: str | None = None
+
+    @field_validator('started_at', 'finished_at')
+    @classmethod
+    def aware(cls, value):
+        if value is None: return value
+        if value.tzinfo is None or value.utcoffset() is None: raise ValueError('Timezone is required')
+        return value.astimezone(timezone.utc)
+
+    @field_validator('artifact_path')
+    @classmethod
+    def path(cls, value): return absolute_path(value)
+
+    @model_validator(mode='after')
+    def consistent(self):
+        if self.finished_at is not None and self.finished_at < self.started_at:
+            raise ValueError('Finish cannot precede start')
+        if self.status == 'running' and (self.finished_at is not None or self.exit_code is not None):
+            raise ValueError('Running reports cannot have finish or exit code')
+        if self.status != 'running' and self.finished_at is None:
+            raise ValueError('Completed reports require finished_at')
+        return self
