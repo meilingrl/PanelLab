@@ -45,7 +45,7 @@ def test_proc_stat_parser_identity_and_no_gpu(tmp_path):
     from services.remote_probe import COLLECTOR_SCRIPT, parse_snapshot
     # Execute the same fixed program with /proc fixture adapters, not source assertions.
     files = {'/proc/self/mountinfo': '25 1 0:5 / /proc rw - proc proc rw\n', '/proc/sys/kernel/random/boot_id': 'boot-fixture', '/proc/meminfo': 'MemTotal: 1000 kB\nMemAvailable: 400 kB\n',
-             '/proc/loadavg': '0.10 0.20 0.30 1/20 42', '/proc/net/dev': 'header\nheader\n eth0: 123 0 0 0 0 0 0 0 456 0 0 0 0 0 0 0\n',
+             '/proc/loadavg': '0.10 0.20 0.30 1/20 42', '/proc/stat': 'cpu 11 22 33 44 55 66 77 88 999 1000\n', '/sys/class/net/eth0/ifindex': '7\n', '/proc/net/dev': 'header\nheader\n eth0: 123 0 0 0 0 0 0 0 456 0 0 0 0 0 0 0\n',
              '/proc/42/stat': '42 (worker ) name) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 9876 20 21',
              '/proc/42/cmdline': b'python\x00train.py\x00', '/proc/42/status': 'VmRSS:\t20 kB\n'}
     import builtins, io, os, subprocess
@@ -63,6 +63,10 @@ def test_proc_stat_parser_identity_and_no_gpu(tmp_path):
     assert value['processes'][0]['memory_bytes'] == 20480
     assert value['system']['memory']['total_bytes'] == 1024000
     assert value['system']['network'][0]['received_bytes'] == 123
+    assert value['system']['network'][0]['ifindex'] == 7
+    assert value['system']['cpu']['ticks'] == {'user':11,'nice':22,'system':33,'idle':44,'iowait':55,'irq':66,'softirq':77,'steal':88}
+    assert value['sampling']['boot_id'] == 'boot-fixture'
+    assert value['sampling']['monotonic_seconds'] >= 0
     files['/proc/42/stat'] = files['/proc/42/stat'].replace('9876', '9999')
     with patch.object(builtins, 'open', fake_open), patch.object(os, 'scandir', side_effect=lambda path: __import__('contextlib').nullcontext(iter([SimpleNamespace(name='42')]))), patch.object(os, 'readlink', return_value='/home/runner'), patch.object(subprocess, 'run', side_effect=FileNotFoundError), patch('sys.stdout', io.StringIO()) as output2:
         exec(compile(COLLECTOR_SCRIPT, '<collector>', 'exec'), {'__name__': '__main__'})
@@ -161,6 +165,132 @@ def test_process_state_survives_parser():
     assert parse_snapshot(json.dumps(payload).encode())['processes'][0]['state'] == 'Z'
 
 
+def sampling_payload():
+    return {'sampling':{'boot_id':'boot-fixture','monotonic_seconds':12.5},
+            'system':{'cpu':{'percent':None,'load_average':[0.1,0.2,0.3],
+                            'ticks':dict(zip(('user','nice','system','idle','iowait','irq','softirq','steal'),range(8)))},
+                      'memory':{'total_bytes':1024,'available_bytes':512},
+                      'network':[{'name':'eth0','received_bytes':123,'sent_bytes':456,'ifindex':7}], 'gpu':None},
+            'processes':[{'pid':42,'identity':'boot:99','command':'train'}], 'capabilities':{},'warnings':[]}
+
+
+def test_parser_additive_sampling_and_legacy_payload():
+    from services.remote_probe import parse_snapshot
+    payload = sampling_payload()
+    parsed = parse_snapshot(json.dumps(payload))
+    assert parsed['sampling'] == {'boot_id':'boot-fixture','monotonic_seconds':12.5}
+    assert parsed['system']['cpu']['ticks']['steal'] == 7
+    assert parsed['system']['network'][0]['ifindex'] == 7
+    del payload['sampling']
+    del payload['system']['cpu']['ticks']
+    del payload['system']['network'][0]['ifindex']
+    parsed = parse_snapshot(json.dumps(payload))
+    assert parsed['sampling'] == {'boot_id':None,'monotonic_seconds':None}
+    assert parsed['system']['cpu']['ticks'] is None
+    assert parsed['system']['network'][0]['ifindex'] is None
+    assert parsed['system']['cpu']['load_average'] == [0.1,0.2,0.3]
+    assert parsed['processes'][0]['pid'] == 42
+    assert parsed['warnings']
+
+
+@pytest.mark.parametrize('bad',[True,-1,2**53,1.5,'3',None])
+def test_parser_bad_ticks_and_network_values_degrade_without_losing_process(bad):
+    from services.remote_probe import parse_snapshot
+    payload = sampling_payload()
+    payload['system']['cpu']['ticks']['iowait'] = bad
+    payload['system']['network'][0].update(ifindex=bad,received_bytes=bad)
+    parsed = parse_snapshot(json.dumps(payload))
+    assert parsed['system']['cpu']['ticks'] is None
+    assert parsed['system']['network'][0]['ifindex'] is None
+    assert parsed['system']['network'][0]['received_bytes'] is None
+    assert parsed['system']['network'][0]['sent_bytes'] == 456
+    assert parsed['system']['memory']['available_bytes'] == 512
+    assert parsed['processes'][0]['identity'] == 'boot:99'
+    assert parsed['warnings']
+
+
+@pytest.mark.parametrize('bad',[True,-0.1,float('nan'),float('inf'),'12.5',None,{}])
+def test_parser_invalid_remote_clock_degrades(bad):
+    from services.remote_probe import parse_snapshot
+    payload = sampling_payload()
+    payload['sampling']['monotonic_seconds'] = bad
+    parsed = parse_snapshot(json.dumps(payload))
+    assert parsed['sampling'] == {'boot_id':'boot-fixture','monotonic_seconds':None}
+    assert parsed['warnings']
+
+
+@pytest.mark.parametrize('bad',['','a'*129,'boot\nsecret',True,{},None])
+def test_parser_invalid_boot_degrades(bad):
+    from services.remote_probe import parse_snapshot
+    payload = sampling_payload()
+    payload['sampling']['boot_id'] = bad
+    parsed = parse_snapshot(json.dumps(payload))
+    assert parsed['sampling'] == {'boot_id':None,'monotonic_seconds':12.5}
+    assert parsed['warnings']
+
+
+def test_parser_safe_boundary_and_malformed_supplemental_shapes():
+    from services.remote_probe import parse_snapshot
+    payload = sampling_payload()
+    payload['system']['cpu']['ticks']['user'] = 2**53-1
+    payload['system']['network'][0].update(received_bytes=2**53-1,sent_bytes=0,ifindex=2**53-1)
+    payload['sampling']['monotonic_seconds'] = 0
+    parsed = parse_snapshot(json.dumps(payload))
+    assert parsed['system']['cpu']['ticks']['user'] == 9007199254740991
+    assert parsed['system']['network'][0] == {'name':'eth0','received_bytes':9007199254740991,'sent_bytes':0,'ifindex':9007199254740991}
+    assert parsed['sampling']['monotonic_seconds'] == 0.0
+    payload['sampling'] = ['invalid']
+    payload['system']['cpu']['ticks'] = ['invalid']
+    payload['system']['network'][0]['ifindex'] = 0
+    parsed = parse_snapshot(json.dumps(payload))
+    assert parsed['sampling'] == {'boot_id':None,'monotonic_seconds':None}
+    assert parsed['system']['cpu']['ticks'] is None
+    assert parsed['system']['network'][0]['ifindex'] is None
+    assert parsed['processes'][0]['pid'] == 42
+
+
+@pytest.mark.parametrize('cpu_bad', ['load','ticks'])
+@pytest.mark.parametrize(('clock','boot','expected_clock','expected_boot'),[
+    (123.5,'boot-fixture',123.5,'boot-fixture'),
+    (float('nan'),'bad\nboot',None,None),
+    (True,'a'*129,None,None),
+    (-1,'boot-fixture',None,'boot-fixture'),
+])
+def test_collector_isolates_cpu_failure_and_bounds_interface_paths(monkeypatch,cpu_bad,clock,boot,expected_clock,expected_boot):
+    import builtins, io, os, subprocess, sys, time
+    from contextlib import nullcontext, redirect_stdout
+    from services.remote_probe import COLLECTOR_SCRIPT, parse_snapshot
+    files = {'/proc/loadavg':'bad' if cpu_bad == 'load' else '0.1 0.2 0.3',
+             '/proc/stat':'cpu bad\n' if cpu_bad == 'ticks' else 'cpu 1 2 3 4 5 6 7 8 99 100\n',
+             '/proc/meminfo':'MemTotal: 100 kB\nMemAvailable: 40 kB\n',
+             '/proc/sys/kernel/random/boot_id':boot,
+             '/proc/net/dev':'eth0: 123 0 0 0 0 0 0 0 456\n../escape: 1 0 0 0 0 0 0 0 2\n',
+             '/sys/class/net/eth0/ifindex':'9007199254740992\n'}
+    paths = []
+    def fake_open(path,*args,**kwargs):
+        paths.append(path)
+        if path not in files: raise FileNotFoundError()
+        return io.StringIO(files[path])
+    monkeypatch.setattr(builtins,'open',fake_open)
+    monkeypatch.setattr(os,'scandir',lambda path:nullcontext(iter([])))
+    monkeypatch.setattr(subprocess,'run',lambda *a,**k:(_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(sys,'argv',['-c'])
+    monkeypatch.setattr(time,'monotonic',lambda:clock)
+    output = io.StringIO()
+    with redirect_stdout(output): exec(compile(COLLECTOR_SCRIPT,'<collector>','exec'),{})
+    raw = json.loads(output.getvalue())
+    assert raw['sampling'] == {'boot_id':expected_boot,'monotonic_seconds':expected_clock}
+    assert raw['system']['network'][0]['ifindex'] is None
+    parsed = parse_snapshot(output.getvalue())
+    assert parsed['sampling'] == {'boot_id':expected_boot,'monotonic_seconds':expected_clock}
+    assert parsed['system']['memory']['available_bytes'] == 40960
+    assert parsed['system']['cpu']['load_average'] == (None if cpu_bad == 'load' else [0.1,0.2,0.3])
+    assert parsed['system']['cpu']['ticks'] == (None if cpu_bad == 'ticks' else {'user':1,'nice':2,'system':3,'idle':4,'iowait':5,'irq':6,'softirq':7,'steal':8})
+    assert parsed['system']['network'][0]['ifindex'] is None
+    assert all('/../' not in path for path in paths)
+    assert parsed['warnings']
+
+
 @pytest.mark.parametrize(('mountinfo','expected'),[
     ('25 1 0:5 / /proc rw,nosuid,nodev,noexec - proc proc rw\n','missing'),
     ('25 1 0:5 / /proc rw - proc proc rw,hidepid=0\n','missing'),
@@ -191,6 +321,7 @@ def test_concealed_pid_enoent_does_not_prove_exit(monkeypatch,mountinfo,expected
     from services import remote_connection, remote_probe, workloads
     monkeypatch.setattr(remote_connection, 'open_remote', lambda *args: nullcontext(object()))
     monkeypatch.setattr(remote_probe, 'collect_snapshot', lambda *args, **kwargs: result)
-    workload = SimpleNamespace(id=1, server_id=71, pid=9999, process_identity='boot:2345', log_path=None)
+    monkeypatch.setattr(remote_connection, 'owned_server', lambda *args: SimpleNamespace(id=71,host='fixture.invalid',port=22,username='lab'))
+    workload = SimpleNamespace(id=1, server_id=71, root_path='/work', pid=9999, process_identity='boot:2345', log_path=None)
     observed = workloads.observation(None, None, workload)
     assert observed['process_status'] == ('exited_or_missing' if expected == 'missing' else 'unknown')
