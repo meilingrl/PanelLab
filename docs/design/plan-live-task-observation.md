@@ -17,8 +17,8 @@ Collector outputs top-level sampling={boot_id:str|null,monotonic_seconds:float|n
 
 Observationadds context={workload:{id,server_id,root_path,log_path,pid,process_identity},server:{id,host,port,username}}, gatheredfromsameownedDBobjects usedforread,withoutsecrets. Nonownersstill404beforeSSH. ExistingAPI/CLIremaincompatible; observationreturns system+sampling+context. Tests realfixedcollectorscriptwithprocfixtures CPUfieldorder/guestignored,memoryavailableifCPUbad,ifindex,monotonic/boot,malformedsample; parserbackwardcompatibility/nullsafevalidation; workloadcontext ownership/credentialabsence andsameIDmodifiedbindings. Do notbroadenlegacyprocessparsercleanupunnecessarily.
 
-- [ ] RED then implement bounded additivefields/context.
-- [ ] Focusedtests thenfullbackendonce; smallcommits; report exactJSON/newfixtures/testresults in task-1-report.md.
+- [x] RED then implement bounded additivefields/context.
+- [x] Focusedtests thenfullbackendonce; smallcommits; report exactJSON/newfixtures/testresults in task-1-report.md.
 
 ## Task 2: live observation state machine and truthful interval metrics
 
@@ -32,12 +32,12 @@ Contextcheck every observationagainstcurrenttask+server (normalizedidentityfield
 
 Tests actualcomponents+faketimers/deferredpromises: firstsampleunknown secondvalidrates;serverboot/interfaces/reset/clockgap/malformedcounts; nooverlap;manualpending;hide/tab/pause/unmountclearandlateignore;backoff/recovery;intervalbounds;same-IDcontextmismatch/notfreshdata,refreshaction;preserveunchangedbindingstate. Adjustexistingfixturestruthfully,nosourcestringtests. RED→GREEN, fullnpmtest/buildonce stable;2smallcommits ifseparable. Reportfiles/tests/limits in task-2-report.md.
 
-- [ ] RED behavior tests and implementation.
-- [ ] Focusedtests,fullfrontend/build and report; independenttaskreview.
+- [x] RED behavior tests and implementation.
+- [x] Focusedtests,fullfrontend/build and report; independenttaskreview.
 
 ## Task 3: controller integration and delivery
 
-- [ ] RealLinuxSSH/MySQLfixture sampleshaveboot/monotonic/ticks/ifindex/context; existingintegration stillpasses.
-- [ ] Browser follow twicevalidrates,pause/resume, sameIDCLIrebindmismatchnotice+refreshrecovery; screenshot,narrowlayout.
+- [x] RealLinuxSSH/MySQLfixture sampleshaveboot/monotonic/ticks/ifindex/context; existingintegration stillpasses.
+- [x] Browser follow twicevalidrates,pause/resume, sameIDCLIrebindmismatchnotice+refreshrecovery; screenshot,narrowlayout.
 - [ ] Updatecurrentguide/docsindex/newdatedreport withoutrewritingoldhistoricalevidence; independentwholebranchreview plusonefixwaveifneeded.
 - [ ] Stoponlyselfcreatedservices; cleangit,smallcommits,pushnewbranchandverifyremoteSHA/mainunchanged.
