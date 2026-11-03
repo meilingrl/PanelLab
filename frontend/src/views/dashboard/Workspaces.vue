@@ -7,6 +7,7 @@ import TaskForm from '../../components/workspaces/TaskForm.vue'
 import TaskDetail from '../../components/workspaces/TaskDetail.vue'
 import '../../components/workspaces/workspaces.css'
 const authSuggestions=ref({})
+const metadataRevision=ref(0)
 const servers=ref([]),tasks=ref([]),serverId=ref(''),kind=ref(''),selectedId=ref(null),loading=ref(false),error=ref(''),showServer=ref(false),showForm=ref(false),editing=ref(null)
 let seq=0,controller
 const visible=computed(()=>tasks.value.filter(t=>(!serverId.value||t.server_id===Number(serverId.value))&&(!kind.value||t.kind===kind.value)))
@@ -20,6 +21,7 @@ async function load(){
  const messages=[]
  if(results[0].status==='fulfilled')servers.value=results[0].value.items;else if(results[0].reason.name!=='AbortError')messages.push(results[0].reason.message)
  if(results[1].status==='fulfilled')tasks.value=results[1].value.items;else if(results[1].reason.name!=='AbortError')messages.push(results[1].reason.message)
+ if(results.every(result=>result.status==='fulfilled'))metadataRevision.value++
  error.value=messages.join('；');loading.value=false
 }
 function newTask(){editing.value=null;showForm.value=true;showServer.value=false}
@@ -40,6 +42,6 @@ onBeforeUnmount(()=>{seq++;controller?.abort()})
   <section v-else-if="!loading&&!showServer" class="ws-panel ws-empty"><span class="ws-empty-mark">↗</span><h2>从一台服务器开始</h2><p>添加连接目标、核对主机指纹，然后浏览目录并登记已有任务。</p><button class="ws-primary" @click="showServer=true">添加第一台服务器</button></section>
   <TaskForm v-if="showForm" :key="editing?.id||'new'" :servers="servers" :task="editing||undefined" :initial-server="Number(serverId)||connectionServer?.id" @saved="saved" @cancel="showForm=false" />
   <div v-else class="ws-board"><aside class="ws-task-list" aria-label="任务列表"><div class="ws-list-heading"><h2>我的任务</h2><span>{{ visible.length }}</span></div><button v-for="task in visible" :key="task.id" :data-testid="'task-'+task.id" class="ws-task-card" :class="{selected:selected?.id===task.id}" :aria-pressed="selected?.id===task.id" @click="selectedId=task.id"><span class="ws-row"><span class="ws-badge">{{ kindLabels[task.kind] }}</span><span class="ws-muted">#{{ task.id }}</span></span><strong>{{ task.name }}</strong><span class="ws-card-server">{{ servers.find(s=>s.id===task.server_id)?.name||'服务器 #'+task.server_id }}</span><code>{{ task.root_path }}</code><span class="ws-card-foot">{{ task.pid?'绑定 PID '+task.pid:'未绑定进程' }}<span>打开 →</span></span></button><div v-if="!visible.length&&!loading" class="ws-empty-list"><h3>这里还没有任务</h3><p>登记已存在的训练、网站或定时任务，将目录和进程留在一个地方。</p><button :disabled="!servers.length" @click="newTask">登记任务</button></div></aside>
-  <TaskDetail v-if="selected" :key="selected.id" :task="selected" :server="taskServer" @edit="edit" @deleted="removed" /><section v-else-if="servers.length" class="ws-panel ws-empty"><span class="ws-empty-mark">▱</span><h2>给远程工作一个入口</h2><p>选择任务即可查看观测、日志、文件和上报记录。</p></section></div>
+  <TaskDetail v-if="selected" :key="selected.id" :task="selected" :server="taskServer" :metadata-revision="metadataRevision" @refresh-task-info="load" @edit="edit" @deleted="removed" /><section v-else-if="servers.length" class="ws-panel ws-empty"><span class="ws-empty-mark">▱</span><h2>给远程工作一个入口</h2><p>选择任务即可查看观测、日志、文件和上报记录。</p></section></div>
  </div>
 </template>

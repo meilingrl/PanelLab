@@ -9,7 +9,7 @@ let wrapper, task, server, intercept, sockets, pinnedTarget
 const store = useTerminalStore()
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
 const response = data => ({ ok: true, json: async () => data, blob: async () => new Blob(['old file']) })
-const observation = command => ({ observed_at: '2026-11-03T00:00:00Z', process_status: 'running', process: { command }, system: {}, warnings: [] })
+const observation = command => ({ context: { workload: { ...task }, server: task.server_id === server.id ? { ...server } : { ...server, id: 72, host: 'second-host' } }, observed_at: '2026-11-03T00:00:00Z', process_status: 'running', process: { command }, system: {}, warnings: [] })
 const listing = cwd => ({ cwd, parent: cwd === task.root_path ? null : task.root_path, entries: [
  { name: 'nested', path: cwd + '/nested', type: 'directory' },
  { name: 'result.txt', path: cwd + '/result.txt', type: 'file', size: 4 },
