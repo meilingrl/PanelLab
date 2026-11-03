@@ -128,6 +128,15 @@ def main():
         request('POST', f'/api/servers/{sid}/connection/trust', json={'token': probe['token']})
         request('POST', f'/api/servers/{sid}/connection/check')
         snapshot = request('GET', f'/api/servers/{sid}/snapshot').json()
+        sampling = snapshot['sampling']
+        assert sampling['boot_id'] and sampling['monotonic_seconds'] > 0
+        cpu_fields = {'user', 'nice', 'system', 'idle', 'iowait', 'irq', 'softirq', 'steal'}
+        assert set(snapshot['system']['cpu']['ticks']) == cpu_fields
+        assert all(type(value) is int and 0 <= value <= 2**53 - 1
+                   for value in snapshot['system']['cpu']['ticks'].values())
+        assert snapshot['system']['cpu']['percent'] is None
+        assert all(type(item['ifindex']) is int and item['ifindex'] > 0
+                   for item in snapshot['system']['network'])
         process = next(item for item in snapshot['processes'] if 'train_demo.py' in item['command'])
         workload = request('POST', '/api/workloads', json={
             'name': '训练现场 · 隔离演示', 'kind': 'training', 'server_id': sid,
@@ -138,6 +147,13 @@ def main():
         wid = workload['id']
         observed = request('GET', f'/api/workloads/{wid}/observation').json()
         assert observed['process_status'] == 'running'
+        assert observed['sampling']['boot_id'] == sampling['boot_id']
+        assert observed['sampling']['monotonic_seconds'] > sampling['monotonic_seconds']
+        assert observed['context'] == {
+            'workload': {key: workload[key] for key in
+                         ('id', 'server_id', 'root_path', 'log_path', 'pid', 'process_identity')},
+            'server': {key: server[key] for key in ('id', 'host', 'port', 'username')},
+        }
         files = request('GET', f'/api/workloads/{wid}/files').json()
         assert any(item['name'] == 'outputs' for item in files['entries'])
         tail = request('GET', f'/api/workloads/{wid}/text', params={'path': FIXTURE_ROOT + '/large.log'}).json()
