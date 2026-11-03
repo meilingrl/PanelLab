@@ -65,6 +65,9 @@ def serialize(row):
 
 
 def observation(db, user, row):
+    server = connection.owned_server(db, user, row.server_id)
+    context = {'workload': {key: getattr(row, key) for key in ('id', 'server_id', 'root_path', 'log_path', 'pid', 'process_identity')},
+               'server': {'id': server.id, **connection.target(server)}}
     with connection.open_remote(db, user, row.server_id) as client:
         snapshot = remote_probe.collect_snapshot(client, pid=row.pid)
         warnings = list(snapshot['warnings'])
@@ -99,7 +102,9 @@ def observation(db, user, row):
                 if exc.status_code >= 500: raise
                 warnings.append('Log file is unavailable')
     return {'workload_id':row.id,'observed_at':snapshot['observed_at'],'process_status':status,
-            'process':process,'system':snapshot['system'],'log':log,'warnings':warnings}
+            'process':process,'system':snapshot['system'],
+            'sampling':snapshot.get('sampling', {'boot_id':None,'monotonic_seconds':None}),
+            'context':context,'log':log,'warnings':warnings}
 
 
 def files(db, user, row, path):

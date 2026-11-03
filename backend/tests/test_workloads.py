@@ -171,6 +171,33 @@ def test_cross_owner_creation_and_rebinding_do_not_connect(workspace):
     assert client.get(f'/api/workloads/{task}').json()['root_path'] == ROOT
 
 
+def test_observation_context_tracks_same_id_binding_and_omits_credentials(workspace,monkeypatch):
+    client,_,_ = workspace
+    task = create(workspace,pid=42,process_identity='boot:99')
+    from services import remote_probe
+    original = remote_probe.collect_snapshot
+    def snapshot(*args,**kwargs):
+        return {**original(*args,**kwargs),'sampling':{'boot_id':'boot-fixture','monotonic_seconds':123.5}}
+    monkeypatch.setattr(remote_probe,'collect_snapshot',snapshot)
+    with SessionLocal() as db:
+        db.get(Server,71).password_encrypted = 'do-not-return-credential'
+        db.commit()
+    url = f'/api/workloads/{task}/observation'
+    result = client.get(url).json()
+    assert result['sampling'] == {'boot_id':'boot-fixture','monotonic_seconds':123.5}
+    assert result['context'] == {'workload':{'id':task,'server_id':71,'root_path':ROOT,'log_path':LOG,'pid':42,'process_identity':'boot:99'},
+                                 'server':{'id':71,'host':'fixture.invalid','port':22,'username':'lab'}}
+    assert 'do-not-return-credential' not in str(result)
+    assert client.patch(f'/api/workloads/{task}',json={'root_path':'/new','log_path':None,'pid':None,'process_identity':None}).status_code == 200
+    with SessionLocal() as db:
+        server = db.get(Server,71)
+        server.host,server.port,server.username = 'new.invalid',2222,'new-user'
+        db.commit()
+    updated = client.get(url).json()['context']
+    assert updated == {'workload':{'id':task,'server_id':71,'root_path':'/new','log_path':None,'pid':None,'process_identity':None},
+                       'server':{'id':71,'host':'new.invalid','port':2222,'username':'new-user'}}
+
+
 def test_read_growth_is_bounded_and_reported(workspace,monkeypatch):
     client,sftp,_ = workspace
     task = create(workspace)
