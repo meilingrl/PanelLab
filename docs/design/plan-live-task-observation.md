@@ -39,5 +39,5 @@ Tests actualcomponents+faketimers/deferredpromises: firstsampleunknown secondval
 
 - [x] RealLinuxSSH/MySQLfixture sampleshaveboot/monotonic/ticks/ifindex/context; existingintegration stillpasses.
 - [x] Browser follow twicevalidrates,pause/resume, sameIDCLIrebindmismatchnotice+refreshrecovery; screenshot,narrowlayout.
-- [ ] Updatecurrentguide/docsindex/newdatedreport withoutrewritingoldhistoricalevidence; independentwholebranchreview plusonefixwaveifneeded.
-- [ ] Stoponlyselfcreatedservices; cleangit,smallcommits,pushnewbranchandverifyremoteSHA/mainunchanged.
+- [x] Updatecurrentguide/docsindex/newdatedreport withoutrewritingoldhistoricalevidence; independentwholebranchreview plusonefixwaveifneeded.
+- [x] Stoponlyselfcreatedservices; cleangit,smallcommits,pushnewbranchandverifyremoteSHA/mainunchanged.
