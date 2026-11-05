@@ -23,9 +23,9 @@ Tools exactlylist_servers,list_tasks,get_task,observe_task,read_task_log,list_ta
 
 MapClientError to explicit MCP toolerrors with safe structurederror ifsupported, fixed recoveryhints, no body/token/rawexception leakage; invalidupstreamschema sanitized. Unexpectederrors generic. API bounded30s/1MiB; remote reads64KiB unchanged. Ensure synchronousHTTP doesn't block stdio protocol thread (SDKthreadhandleroranyio offload); no new backgroundpolls.
 
-- [ ] Write tests before implementation: SDK discover exact8 tool schemas and descriptions; tools with loopbackHTTP fixture captureonlyGET/rightpaths/args, listfilterpagination; get/observe preservecontext/time; logunbound and paths/nonowners; malformedresponses/401/404/409/connectionfail/oversize showisError notsuccess; no credential/errorbody leak; strictIDs/bools/invalidpaths/pagebounds rejectedbeforeHTTP; remoteinstructiontext returnedasdata.
-- [ ] Implement tools/entry, genuine stdio subprocess testfromnonrepocwd, cleanstdout handshake/toolcall and failurestartup stderr, no SDKCLIdependency.
-- [ ] Run MCP tests in isolatedMCPenv, existingCLItests inbackendenv (no fullfrontendneeded). Commit2smallstepsifseparable; report task-1-report.md exacttoolfields/output/SDKinterfaces/RED/GREEN/limitations. Reviewerrootdispatch.
+- [x] Write tests before implementation: SDK discover exact8 tool schemas and descriptions; tools with loopbackHTTP fixture captureonlyGET/rightpaths/args, listfilterpagination; get/observe preservecontext/time; logunbound and paths/nonowners; malformedresponses/401/404/409/connectionfail/oversize showisError notsuccess; no credential/errorbody leak; strictIDs/bools/invalidpaths/pagebounds rejectedbeforeHTTP; remoteinstructiontext returnedasdata.
+- [x] Implement tools/entry, genuine stdio subprocess testfromnonrepocwd, cleanstdout handshake/toolcall and failurestartup stderr, no SDKCLIdependency.
+- [x] Run MCP tests in isolatedMCPenv, existingCLItests inbackendenv (no fullfrontendneeded). Commit2smallstepsifseparable; report task-1-report.md exacttoolfields/output/SDKinterfaces/RED/GREEN/limitations. Reviewerrootdispatch.
 
 ## Task 2: onboarding configuration and CI
 
@@ -34,11 +34,11 @@ Consumes Task1entry parser/main/build_server; readtask1report first. Implement -
 --check validatesconfiguredAPI withGETservers, returns onlyok/server_count; errors fixedsafeJSON orstderr/nonzero, no serverdetailsorcredentials, noSDKneeded. SDKmissingservemode reportsinstallcommandandnonzero. Unicode/spacepaths andnonrepocwd supported.
 Guide describes isolatedenvinstall requirements, preexistingAPI/auth/tokenfileconfiguration and expiry; configisgeneric clienthostmaydiffer; actualread-onlytoolset isnotrestrictedBearercredential, do notclaimdelegation; noautoMCPclientinstall. Include exactcommands and simple discovery→list→observe→logs workflow, unbound/unknown/reported boundaries; tooltable. Noactualtokenfixturesinexample.
 CI add independentMCPjob Python3.11 installscriptsrequirements +pytest run scripts/tests, keeping existingbackend/frontendjobsunchanged andmain/PRtriggersunchanged.
-- [ ] RED subprocess tests configurationrequiresfile/noSDK/noHTTP/no secrets (evenenv set), absolutepaths/cwd/URLvalidation; checksuccess/authfail/unknownfailure; servecompatibility.
-- [ ] Implement onboarding/guide/CI and run combinedMCPtests once plusCLIregression asaffected; reporttask-2-report.md, smallcommit(s), independenttaskreview.
+- [x] RED subprocess tests configurationrequiresfile/noSDK/noHTTP/no secrets (evenenv set), absolutepaths/cwd/URLvalidation; checksuccess/authfail/unknownfailure; servecompatibility.
+- [x] Implement onboarding/guide/CI and run combinedMCPtests once plusCLIregression asaffected; reporttask-2-report.md, smallcommit(s), independenttaskreview.
 
 ## Task 3: controller integration and handoff
 
-- [ ] Extend scripts/verify_workspace_lab.py with optional --mcp-python absoluteinterpreter; afterfixturetests invoke tracked scripts/verify_mcp_lab.py (rootowned) usingSDKclientstdio todiscover/read samefixturetask, processidentity/context, logs/files/text/runs; tokenonlyenvironment nooutput. Existingwithoutoptionworks. ActualLinux/MySQLfixturePASS.
+- [x] Extend scripts/verify_workspace_lab.py with optional --mcp-python absoluteinterpreter; afterfixturetests invoke tracked scripts/verify_mcp_lab.py (rootowned) usingSDKclientstdio todiscover/read samefixturetask, processidentity/context, logs/files/text/runs; tokenonlyenvironment nooutput. Existingwithoutoptionworks. ActualLinux/MySQLfixturePASS.
 - [ ] Root currentREADME/docsindex/guide links/newdatedreport, roadmapstatus; evidence fromtaskreports andindependentreviews plusrealprotocol, noLLM/nativehostclaim.
 - [ ] Finalwholebranchreview once; oneconsolidatedfixwave/scopedreviewifneeded. Stopownservices, preserveassets. Cleangit/smallcommits/pushnewbranch, verifyremoteSHA/main/previousbranchunchanged.

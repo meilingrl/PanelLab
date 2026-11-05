@@ -1,8 +1,8 @@
 # PanelLab
 
-面向个人与小团队的**远程任务工作台**：把服务器上的训练实验、网站和定时任务关联到具体进程、日志与文件，人通过界面查看，Agent通过相同API与CLI接续工作。当前为本地运行的Web应用及CLI，目标远程系统为Linux。
+面向个人与小团队的**远程任务工作台**：把服务器上的训练实验、网站和定时任务关联到具体进程、日志与文件，人通过界面查看，外部Agent通过相同API、CLI或可选MCP工具读取任务现场。当前为本地运行的Web应用及CLI，目标远程系统为Linux。
 
-工作台使用统一服务器记录和显式主机公钥信任，提供任务登记、现场观察、目录点选、日志尾部、文件下载和上报记录。具体使用见 [工作台指南](docs/user/remote-workspace.md)，实际验证与限制见 [工作台基础记录](docs/project/remote-workspace-20261103.md) 与 [实时观测记录](docs/project/live-observation-20261103.md)。
+工作台使用统一服务器记录和显式主机公钥信任，提供任务登记、现场观察、目录点选、日志尾部、文件下载和上报记录。具体使用见 [工作台指南](docs/user/remote-workspace.md)，实际验证与限制见 [工作台基础记录](docs/project/remote-workspace-20261103.md)、[实时观测记录](docs/project/live-observation-20261103.md) 与 [MCP接入记录](docs/project/mcp-access-20261105.md)。
 
 同时保留可审查、可恢复的本机Nginx站点变更，以及原有监控、终端和MySQL管理。远程任务工作台不等于远程站点部署；站点和数据库管理仍作用于面板配置的共享服务。上一轮证据见 [站点变更记录](docs/project/production-readiness-20261102.md)。
 
@@ -41,6 +41,7 @@ cd frontend && npm install && npm run dev
 - **远程任务工作台**：点选进程/目录/日志，固定已有任务，查看资源与进程身份，浏览与下载文件，记录显式上报的执行结果
 - **可控实时观测**：概览按2–60秒间隔跟随，展示CPU和各网卡区间速率；暂停、断线和任务改绑时明确区分旧数据
 - **统一机器接口**：`python scripts/panellab.py --help`；CLI通过同一HTTP API访问数据，不另走SSH
+- **MCP接入**：本地stdio提供8项可发现的只读工具，支持配置生成与API连接检查；按 [接入指南](docs/user/mcp-access.md) 单独安装，不含内置聊天Agent
 - **可信连接**：主机指纹确认、公钥变化拒绝、短期单次终端票据；可选Tailscale设备发现和认证模式（实际tailnet未验收）
 
 - **用户与登录**：账号密码、修改密码、JWT；生产关闭注册及演示登录，共享资源限制到运维账号
@@ -52,7 +53,7 @@ cd frontend && npm install && npm run dev
 
 ### 历史构想 / 后续候选
 
-以下是历史功能构想，不是本轮承诺。当前优先级与边界见 [远程任务工作台设计](docs/design/design-remote-workspace.md)。
+以下是历史功能构想，不是本轮承诺。当前优先级见 [路线图](docs/project/feature-roadmap.md)，工作台边界见 [设计](docs/design/design-remote-workspace.md)。
 
 - 登录增强：手机验证码、微信/QQ 扫码
 - 终端增强：常用指令库、简易 AI 对话
@@ -159,7 +160,7 @@ npm install
 - 进程存在不代表训练推进；上报记录不代表独立验证成功。网站URL是打开入口，未自动做健康检查。
 - 文本/日志读取上限64KiB，下载上限16MiB；符号链接与特殊文件不跟随。
 - CPU占比与各网卡近似速率需两次有效区间采样，自动跟随默认关闭；服务器共享资源不能归因于某个任务，累计字节与速率分开显示。缺少GPU采集工具时显示不可用。
-- Tailscale可选。软件不改变tailnet授权，也没有内置LLM聊天网关或MCP服务。
+- Tailscale可选。软件不改变tailnet授权，没有内置LLM聊天网关；可选MCP为本地stdio只读适配器，仍使用原账号Bearer权限。
 
 ## 站点变更与生产模式
 

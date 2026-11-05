@@ -52,4 +52,4 @@ python scripts/panellab.py files 1
 
 示例中的1替换成UI显示的任务ID。创建、更新和上报支持JSON文件或标准输入。CLI输出结构化JSON；失败返回非零退出码。下载默认不覆盖本地文件；移除登记需要明确确认，远程任务不会因此停止。
 
-本轮未内置聊天模型、MCP服务器或自动运行任意命令的Agent。可通过现有API/CLI让你选择的Agent操作任务对象。
+支持MCP的外部Agent可以通过 [MCP接入指南](mcp-access.md) 配置本地stdio适配器，发现并读取同一任务、日志和文件。首版八项工具只读，原账号Bearer权限并未缩减；元数据写入仍使用已有API/CLI。当前未内置聊天模型或自动运行任意命令的Agent。

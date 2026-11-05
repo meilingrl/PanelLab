@@ -1,6 +1,8 @@
 # PanelLab 文档索引
 
-本轮入口：[实时观测设计](design/design-live-task-observation.md) · [实施计划](design/plan-live-task-observation.md) · [本轮记录](project/live-observation-20261103.md)。
+本轮入口：[MCP接入设计](design/design-mcp-task-access.md) · [实施计划](design/plan-mcp-task-access.md) · [本轮记录](project/mcp-access-20261105.md) · [接入指南](user/mcp-access.md)。
+
+实时观测：[实时观测设计](design/design-live-task-observation.md) · [实施计划](design/plan-live-task-observation.md) · [本轮记录](project/live-observation-20261103.md)。
 
 工作台基础：[远程任务工作台设计](design/design-remote-workspace.md) · [实施计划](design/plan-remote-workspace.md) · [本轮记录](project/remote-workspace-20261103.md)。
 
