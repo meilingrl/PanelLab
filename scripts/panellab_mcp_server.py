@@ -1,10 +1,14 @@
 """Read-only MCP adapter over PanelLab's authenticated, bounded HTTP client."""
 import json
+import inspect
+from functools import partial
+
+import anyio
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import Field
+from pydantic import ConfigDict, Field, ValidationError, create_model
 
 from panellab import ClientError
 
@@ -24,6 +28,7 @@ These tools are read-only; the configured Bearer credential retains its original
 """
 
 ERRORS = {
+    'invalid_arguments': ('Invalid tool arguments.', 'Use the discovered tool schema; provide exact types and supported fields.'),
     'invalid_response': ('API returned an invalid response.', 'Check API compatibility and retry.'),
     'response_too_large': ('API response exceeded the 1 MiB client limit.', 'Reduce the API response or check API compatibility.'),
     'connection_failed': ('Cannot reach the API.', 'Check the API URL and network, then retry.'),
@@ -75,7 +80,7 @@ def task_value(value):
     require(positive(value.get('id')) and positive(value.get('server_id'))
             and isinstance(value.get('name'), str) and value.get('kind') in ('training', 'website', 'scheduled')
             and isinstance(value.get('root_path'), str)
-            and (value.get('log_path') is None or isinstance(value['log_path'], str)))
+            and 'log_path' in value and (value['log_path'] is None or isinstance(value['log_path'], str)))
     return value
 
 
@@ -92,10 +97,21 @@ def validate(value, shape):
         require(positive(value.get('workload_id')) and isinstance(value.get('observed_at'), str)
                 and value.get('process_status') in ('unknown', 'unbound', 'running', 'exited_or_missing')
                 and all(isinstance(value.get(key), dict) for key in ('context', 'sampling', 'system', 'log'))
-                and isinstance(value.get('warnings'), list))
+                and 'process' in value and (value['process'] is None or isinstance(value['process'], dict))
+                and isinstance(value.get('warnings'), list) and all(isinstance(warning, str) for warning in value['warnings']))
+        require(isinstance(value['context'].get('workload'), dict) and isinstance(value['context'].get('server'), dict)
+                and positive(value['context']['workload'].get('id')) and positive(value['context']['server'].get('id')))
+        sampling = value['sampling']
+        require('boot_id' in sampling and (sampling['boot_id'] is None or isinstance(sampling['boot_id'], str))
+                and 'monotonic_seconds' in sampling and (sampling['monotonic_seconds'] is None or type(sampling['monotonic_seconds']) in (int, float)))
     elif shape == 'files':
         require(isinstance(value.get('cwd'), str) and isinstance(value.get('entries'), list)
-                and all(isinstance(item, dict) and isinstance(item.get('name'), str) for item in value['entries'])
+                and 'parent' in value and (value['parent'] is None or isinstance(value['parent'], str))
+                and all(isinstance(item, dict) and isinstance(item.get('name'), str)
+                        and isinstance(item.get('path'), str) and item.get('type') in ('file', 'directory', 'symlink', 'special')
+                        and 'size' in item and (item['size'] is None or type(item['size']) is int)
+                        and 'mtime' in item and (item['mtime'] is None or type(item['mtime']) in (int, float))
+                        and type(item.get('disabled')) is bool for item in value['entries'])
                 and type(value.get('truncated')) is bool)
     elif shape == 'text':
         require(isinstance(value.get('path'), str) and isinstance(value.get('text'), str)
@@ -109,9 +125,53 @@ def validate(value, shape):
     return value
 
 
+
+class StrictMCPServer(MCPServer):
+    """Keep raw JSON scalars intact instead of the SDK's JSON-in-string coercion.
+
+    SDK 2.3's default argument pre-parser treats the string "null" as None in
+    optional fields. Derive strict models from the same annotated handlers used
+    for discovery, then dispatch synchronous HTTP work on AnyIO's worker pool.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._raw_tools = {}
+
+    def tool(self, *args, **kwargs):
+        register = super().tool(*args, **kwargs)
+        def decorator(fn):
+            register(fn)
+            name = kwargs.get('name') or (args[0] if args else None) or fn.__name__
+            fields = {key: (parameter.annotation, ... if parameter.default is inspect.Parameter.empty else parameter.default)
+                      for key, parameter in inspect.signature(fn).parameters.items()}
+            model = create_model(name + 'Arguments', __config__=ConfigDict(extra='forbid'), **fields)
+            self._raw_tools[name] = (fn, model)
+            return fn
+        return decorator
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+        for tool in tools:
+            tool.input_schema = self._raw_tools[tool.name][1].model_json_schema()
+        return tools
+
+    async def call_tool(self, name, arguments, context=None):
+        handler = self._raw_tools.get(name)
+        if handler is None: return error_result('invalid_arguments')
+        fn, model = handler
+        try:
+            values = model.model_validate(arguments).model_dump()
+        except ValidationError:
+            return error_result('invalid_arguments')
+        try:
+            return await anyio.to_thread.run_sync(partial(fn, **values))
+        except Exception:
+            return error_result('adapter_error')
+
+
 def build_server(api):
-    """Build the eight-tool SDK server. Synchronous handlers run in SDK worker threads."""
-    server = MCPServer('PanelLab', instructions=INSTRUCTIONS, log_level='ERROR')
+    """Build the eight-tool SDK server with strict raw inputs and offloaded HTTP."""
+    server = StrictMCPServer('PanelLab', instructions=INSTRUCTIONS, log_level='ERROR')
     annotations = ToolAnnotations(read_only_hint=True, destructive_hint=False)
 
     def get(path, shape, query=None):
@@ -173,7 +233,7 @@ def build_server(api):
     @server.tool(annotations=annotations, description='List task outcome reports, newest first. source=reported means a submitted claim, not independently verified success; use before_id for older records.')
     def list_reported_runs(task_id: TaskID,
         limit: Annotated[int, Field(strict=True, ge=1, le=50, description='Maximum reported runs to return (1..50).')] = 20,
-        before_id: Annotated[TaskID | None, Field(description='Optional positive report ID cursor; return older reports with smaller IDs.')] = None,
+        before_id: Annotated[Annotated[int, Field(strict=True, ge=1)] | None, Field(description='Optional positive report ID cursor; return older reports with smaller IDs.')] = None,
     ) -> CallToolResult:
         def operation():
             query = {'limit': limit}
