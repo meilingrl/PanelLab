@@ -4,6 +4,7 @@
 Build: docker build -t panellab-ssh-lab:20261103 scripts/fixtures/remote_workspace
 Run with backend requirements-dev: python scripts/verify_workspace_lab.py
 --serve creates fixture API on a random loopback port for manual browser checks.
+--mcp-python /absolute/python also verifies optional MCP access with that interpreter.
 Every container/process created here is stopped and removed on exit.
 """
 from contextlib import ExitStack
@@ -54,7 +55,10 @@ def loopback_port():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serve', action='store_true', help='keep isolated fixture API alive until Ctrl-C/TERM')
+    parser.add_argument('--mcp-python', help='Optional Python interpreter with scripts/requirements-mcp.txt installed')
     args = parser.parse_args()
+    if args.mcp_python and not Path(args.mcp_python).is_absolute():
+        parser.error('--mcp-python must be an absolute interpreter path')
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     import httpx
     import pymysql
@@ -229,6 +233,17 @@ def main():
         request('POST', f'/api/servers/{sid}/connection/trust', json={'token': replacement['token']})
         request('POST', f'/api/servers/{sid}/connection/check')
         print('PASS: real Linux SSH host trust, process identity, pin task, SFTP browse/tail, confinement, download, reported run, server guard, shared CLI-created tasks, real PTY/replay and changed-host-key refusal', flush=True)
+        if args.mcp_python:
+            mcp_check = subprocess.run([
+                args.mcp_python, str(ROOT / 'scripts/verify_mcp_lab.py'),
+                '--url', f'http://127.0.0.1:{api_port}', '--task-id', str(wid),
+                '--server-id', str(sid), '--root', FIXTURE_ROOT,
+            ], env=cli_env, capture_output=True, text=True, timeout=120)
+            if mcp_check.returncode:
+                # Fixture diagnostics can include tool data; never echo the token.
+                diagnostic = (mcp_check.stderr + mcp_check.stdout).replace(token, '[redacted]')
+                raise RuntimeError('MCP fixture verification failed: ' + diagnostic[-3000:])
+            print(mcp_check.stdout.strip(), flush=True)
         if args.serve:
             print(json.dumps({'api_url': f'http://127.0.0.1:{api_port}', 'username': 'admin',
                               'fixture_password': PASSWORD, 'server_id': sid, 'workload_id': wid,
