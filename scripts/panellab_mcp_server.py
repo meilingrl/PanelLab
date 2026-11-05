@@ -116,8 +116,8 @@ def validate(value, shape):
     elif shape == 'text':
         require(isinstance(value.get('path'), str) and isinstance(value.get('text'), str)
                 and type(value.get('truncated')) is bool and type(value.get('changed_during_read')) is bool
-                and type(value.get('size')) is int and value['size'] >= 0
-                and type(value.get('modified_at')) in (int, float))
+                and 'size' in value and (value['size'] is None or (type(value['size']) is int and value['size'] >= 0))
+                and 'modified_at' in value and (value['modified_at'] is None or type(value['modified_at']) in (int, float)))
     elif shape == 'runs':
         for item in items_value(value):
             require(positive(item.get('id')) and positive(item.get('workload_id')) and item.get('source') == 'reported'

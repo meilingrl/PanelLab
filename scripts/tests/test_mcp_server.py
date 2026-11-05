@@ -41,7 +41,7 @@ def build(api):
 
 @pytest.fixture
 def http_api():
-    state = {'requests': [], 'status': 200, 'raw': None, 'delay': 0, 'task': dict(TASK)}
+    state = {'requests': [], 'status': 200, 'raw': None, 'delay': 0, 'task': dict(TASK), 'text': dict(TEXT)}
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args): pass
         def do_GET(self):
@@ -52,7 +52,7 @@ def http_api():
                 '/api/servers': {'items': [{'id': 2, 'name': 'fixture', 'host': 'host', 'port': 22, 'username': 'user', 'password': 'PRIVATE', 'ssh_key': 'PRIVATE'}]},
                 '/api/workloads': {'items': [state['task'], {**TASK, 'id': 8, 'name': 'TRAIN other'}, {**TASK, 'id': 9, 'name': 'site', 'kind': 'website'}]},
                 '/api/workloads/7': state['task'], '/api/workloads/7/observation': OBSERVATION,
-                '/api/workloads/7/files': FILES, '/api/workloads/7/text': TEXT,
+                '/api/workloads/7/files': FILES, '/api/workloads/7/text': state['text'],
                 '/api/workloads/7/runs': RUNS,
             }.get(parsed.path, {'detail': 'PRIVATE token-secret'})
             self.send_response(state['status'])
@@ -294,3 +294,42 @@ def test_stdout_contains_only_jsonrpc_frames(http_api, tmp_path):
         if process.poll() is None:
             process.kill()
             process.communicate()
+
+
+@pytest.mark.parametrize('tool', ['read_task_text', 'read_task_log'])
+@pytest.mark.parametrize('metadata', [
+    {'modified_at': None}, {'size': None}, {'modified_at': None, 'size': None},
+], ids=['unknown-mtime', 'unknown-size', 'unknown-mtime-and-size'])
+def test_text_reads_preserve_nullable_metadata(http_api, tool, metadata):
+    api, state = http_api
+    state['text'].update(metadata)
+    args = {'task_id': 7}
+    if tool == 'read_task_text': args['path'] = '/work/a 中文.log'
+    result = call(api, tool, args)
+    assert not result.is_error
+    assert result.structured_content == {**TEXT, **metadata}
+    assert state['requests'][-1][:3] == ('GET', '/api/workloads/7/text', {'path': ['/work/a 中文.log']})
+
+
+@pytest.mark.parametrize('tool', ['read_task_text', 'read_task_log'])
+@pytest.mark.parametrize('field', ['modified_at', 'size'])
+@pytest.mark.parametrize('value', [True, 'PRIVATE token-secret', {}], ids=['boolean', 'string', 'object'])
+def test_text_reads_reject_malformed_metadata(http_api, tool, field, value):
+    api, state = http_api
+    state['text'][field] = value
+    args = {'task_id': 7}
+    if tool == 'read_task_text': args['path'] = '/work/a 中文.log'
+    result = call(api, tool, args)
+    assert result.is_error and result.structured_content['error']['code'] == 'invalid_response'
+    assert 'PRIVATE' not in result.model_dump_json() and 'token-secret' not in result.model_dump_json()
+
+
+@pytest.mark.parametrize('tool', ['read_task_text', 'read_task_log'])
+@pytest.mark.parametrize('field', ['modified_at', 'size'])
+def test_text_reads_reject_missing_metadata_fields(http_api, tool, field):
+    api, state = http_api
+    state['text'].pop(field)
+    args = {'task_id': 7}
+    if tool == 'read_task_text': args['path'] = '/work/a 中文.log'
+    result = call(api, tool, args)
+    assert result.is_error and result.structured_content['error']['code'] == 'invalid_response'
