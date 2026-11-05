@@ -46,6 +46,7 @@ def check_api(api):
 
 
 def main(argv=None):
+    args = None
     try:
         args = parser().parse_args(argv)
         if args.print_config:
@@ -64,7 +65,15 @@ def main(argv=None):
         return 0
     except ClientError as exc:
         # ClientError messages are fixed local diagnostics, never response bodies or tokens.
-        print('PanelLab MCP: ' + exc.error['message'], file=sys.stderr)
+        message = exc.error['message']
+        status = exc.error.get('status')
+        if args is not None and args.check and type(status) is int and 100 <= status <= 599:
+            hint = {401: 'Sign in again and update the configured credential.',
+                    403: 'Check account access in the PanelLab interface.',
+                    404: 'Check the API URL and endpoint compatibility.',
+                    409: 'Check API configuration in the PanelLab interface.'}.get(status, 'Check API availability and configuration.')
+            message += f' (HTTP {status}). ' + hint
+        print('PanelLab MCP: ' + message, file=sys.stderr)
         return 1
     except Exception:
         print('PanelLab MCP startup failed; check local configuration and installation.', file=sys.stderr)

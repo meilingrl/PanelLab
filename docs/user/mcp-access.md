@@ -81,7 +81,7 @@ PY
   --url "$PANEL_URL" --token-file "$TOKEN_FILE" --print-config
 ```
 
-检查成功只输出 `{"ok": true, "server_count": ...}`，数量为零也是有效结果；不会输出服务器详情。检查调用一次 `GET /api/servers`，验证当前 API 连通性和账号访问，不验证某个任务的 SSH、目录绑定或完整工具流程。失败向 stderr 输出脱敏诊断并非零退出。
+检查成功只输出 `{"ok": true, "server_count": ...}`，数量为零也是有效结果；不会输出服务器详情。检查调用一次 `GET /api/servers`，验证当前 API 连通性和账号访问，不验证某个任务的 SSH、目录绑定或完整工具流程。失败向 stderr 输出脱敏诊断并非零退出；HTTP 失败保留数字状态码，401 提示重新登录、403 提示检查账号访问，404/409 提示检查 API 地址或配置。
 
 配置生成只输出通用 `mcpServers.panellab` JSON：`command` 是当前 Python 的绝对路径，`args` 包含入口、API URL、凭据文件的绝对路径，以及显式指定的 `--allow-insecure`。它不读取凭据文件、不联系 API、不输出环境变量或秘密，也不写任何客户端配置。文件可以尚不存在；生成成功不表示认证成功。
 

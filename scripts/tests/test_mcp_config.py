@@ -124,6 +124,19 @@ def test_check_failure_is_nonzero_and_never_prints_response(tmp_path, api, statu
     assert len(state['requests']) == 1
 
 
+@pytest.mark.parametrize('status,hint', [
+    (401, 'Sign in again'), (403, 'account access'),
+    (404, 'API URL'), (409, 'API configuration'),
+])
+def test_check_http_reports_safe_status_and_recovery_hint(tmp_path, api, status, hint):
+    url, state = api
+    state.update(status=status, payload={'detail': 'PRIVATE ' + SECRET})
+    result = run_entry('--check', '--url', url, cwd=tmp_path)
+    assert result.returncode != 0 and result.stdout == ''
+    assert f'HTTP {status}' in result.stderr and hint in result.stderr
+    assert 'PRIVATE' not in result.stderr and 'Traceback' not in result.stderr
+
+
 def test_unexpected_check_exception_is_sanitized(capsys, monkeypatch):
     spec = importlib.util.spec_from_file_location('panellab_mcp_config_test', ENTRY)
     module = importlib.util.module_from_spec(spec)
