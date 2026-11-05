@@ -39,6 +39,6 @@ CI add independentMCPjob Python3.11 installscriptsrequirements +pytest run scrip
 
 ## Task 3: controller integration and handoff
 
-- [x] Extend scripts/verify_workspace_lab.py with optional --mcp-python absoluteinterpreter; afterfixturetests invoke tracked scripts/verify_mcp_lab.py (rootowned) usingSDKclientstdio todiscover/read samefixturetask, processidentity/context, logs/files/text/runs; tokenonlyenvironment nooutput. Existingwithoutoptionworks. ActualLinux/MySQLfixturePASS.
-- [ ] Root currentREADME/docsindex/guide links/newdatedreport, roadmapstatus; evidence fromtaskreports andindependentreviews plusrealprotocol, noLLM/nativehostclaim.
-- [ ] Finalwholebranchreview once; oneconsolidatedfixwave/scopedreviewifneeded. Stopownservices, preserveassets. Cleangit/smallcommits/pushnewbranch, verifyremoteSHA/main/previousbranchunchanged.
+- [x] Extend scripts/verify_workspace_lab.py with optional --mcp-python absoluteinterpreter; afterfixturetests invoke tracked scripts/verify_mcp_lab.py (rootowned) usingSDKclientstdio todiscover/read samefixturetask, processidentity/context, logs/files/text/runs; bootstrap token through environment, private disposable tokenfile for generatedconfig, no credentialoutput. Existingwithoutoptionworks. ActualLinux/MySQLfixturePASS.
+- [x] Root currentREADME/docsindex/guide links/newdatedreport, roadmapstatus; evidence fromtaskreports andindependentreviews plusrealprotocol, noLLM/nativehostclaim.
+- [x] Finalwholebranchreview once; oneconsolidatedfixwave/scopedreviewifneeded. Stopownservices, preserveassets. Cleangit/smallcommits/pushnewbranch, verifyremoteSHA/main/previousbranchunchanged.
