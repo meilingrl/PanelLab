@@ -1,0 +1,41 @@
+# Managed by scripts/local_panel.py. Each local instance has a separate project and data volume.
+services:
+  mysql:
+    image: mysql:8.4.9
+    environment:
+      MYSQL_DATABASE: panel_lab
+      MYSQL_USER: panel_lab
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u panel_lab panel_lab -e "SELECT 1"']
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  app:
+    image: ${COMPOSE_PROJECT_NAME:?}-app:local
+    pull_policy: never
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      MYSQL_HOST: mysql
+      MYSQL_DATABASE: panel_lab
+      MYSQL_USER: panel_lab
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?}
+      INIT_ADMIN_PASSWORD: ${INIT_ADMIN_PASSWORD:?}
+      SECRET_KEY: ${SECRET_KEY:?}
+    command: ["sh", "-ec", "python -m init_db && exec python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
+    ports:
+      - "127.0.0.1:${PANEL_LOCAL_PORT:?}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/health', timeout=2).close()"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mysql_data:
