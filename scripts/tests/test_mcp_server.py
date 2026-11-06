@@ -308,7 +308,10 @@ def test_text_reads_preserve_nullable_metadata(http_api, tool, metadata):
     result = call(api, tool, args)
     assert not result.is_error
     assert result.structured_content == {**TEXT, **metadata}
-    assert state['requests'][-1][:3] == ('GET', '/api/workloads/7/text', {'path': ['/work/a 中文.log']})
+    if tool == 'read_task_log':
+        assert state['requests'][-1][:3] == ('GET', '/api/workloads/7/log', {})
+    else:
+        assert state['requests'][-1][:3] == ('GET', '/api/workloads/7/text', {'path': ['/work/a 中文.log']})
 
 
 @pytest.mark.parametrize('tool', ['read_task_text', 'read_task_log'])
