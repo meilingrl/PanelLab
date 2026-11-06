@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,16 +16,49 @@ ROOT = Path(__file__).resolve().parents[1]
 SECRET_KEYS = ("MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "SECRET_KEY", "INIT_ADMIN_PASSWORD")
 
 
+def private_directory(path, create):
+    path = Path(os.path.abspath(path.expanduser()))
+    # macOS exposes /tmp and /var as root-owned aliases for /private/tmp and /private/var.
+    if sys.platform == "darwin" and len(path.parts) >= 2 and path.parts[1] in ("tmp", "var"):
+        alias = Path("/") / path.parts[1]
+        if alias.is_symlink() and alias.lstat().st_uid == 0 and os.readlink(alias) == "private/" + alias.name:
+            path = Path("/private").joinpath(*path.parts[1:])
+
+    uid = os.getuid()
+    for parent in (*reversed(path.parents), path):
+        try:
+            info = parent.lstat()
+        except FileNotFoundError:
+            if not create:
+                raise ValueError("此目录尚未初始化，请先启动面板。") from None
+            parent.mkdir(mode=0o700, exist_ok=True)
+            info = parent.lstat()
+        # In a trusted sticky directory, another user cannot rename our child.
+        replaceable = info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (uid, 0) or replaceable:
+            raise ValueError(f"不安全的实例目录：{parent}")
+    if info.st_uid != uid or info.st_mode & 0o077:
+        raise ValueError(f"不安全的实例目录，请使用当前用户独占的目录：{path}")
+    return path
+
+
 def load_instance(directory, create):
     path = directory / "panellab-local.json"
-    if not path.exists():
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
         if not create:
-            raise ValueError("此目录尚未初始化，请先启动面板。")
+            raise ValueError("此目录尚未初始化，请先启动面板。") from None
         instance = {key: secrets.token_hex(24) for key in SECRET_KEYS}
         instance["project"] = "panellab-local-" + secrets.token_hex(8)
-        with tempfile.NamedTemporaryFile(mode="w", dir=directory, prefix=path.name, delete=False) as temp:
+        with tempfile.NamedTemporaryFile(mode="w", dir=directory, prefix=path.name) as temp:
             json.dump(instance, temp)
-        os.replace(temp.name, path)
+            temp.flush()
+            os.fsync(temp.fileno())
+            os.link(temp.name, path)
+        return instance
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError(f"不安全的实例凭据，请使用当前用户独占的常规文件：{path}")
     with path.open() as saved:
         instance = json.load(saved)
     if not isinstance(instance, dict) or not re.fullmatch(r"panellab-local-[0-9a-f]{16}", str(instance.get("project"))):
@@ -72,13 +106,9 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port 取值范围为 1–65535")
-    directory = args.state_dir.expanduser().resolve()
     docker_env = local_docker_env() if args.action != "password" else None
     start = args.action == "start"
-    if start:
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    elif not directory.is_dir():
-        raise ValueError("此目录尚未初始化，请先启动面板。")
+    directory = private_directory(args.state_dir, start)
 
     # Serialize initialization, builds and container replacement for this instance.
     fd = os.open(directory, os.O_RDONLY)

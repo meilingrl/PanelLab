@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -97,3 +98,72 @@ def test_build_and_compose_are_pinned_to_inspected_socket(tmp_path):
     assert any(command.startswith("build ") for command, _, _ in commands)
     assert any(command.startswith("compose --project-name") for command, _, _ in commands)
     assert all(host == local and context == "" for _, host, context in commands)
+
+
+def valid_state(directory):
+    config = {key: "private-" + "b" * 40 for key in
+              ("MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "SECRET_KEY", "INIT_ADMIN_PASSWORD")}
+    config["project"] = "panellab-local-0123456789abcdef"
+    file = directory / "panellab-local.json"
+    file.write_text(json.dumps(config))
+    file.chmod(0o600)
+    return file
+
+
+@pytest.mark.parametrize("case", [
+    "writable-directory", "replaceable-parent", "symlink-parent", "symlink-directory",
+    "symlink-file", "dangling-file", "public-file", "fifo",
+])
+def test_unsafe_state_is_refused_without_password_or_modification(tmp_path, case):
+    parent = tmp_path / "parent"
+    parent.mkdir(mode=0o700)
+    state = parent / "state"
+    state.mkdir(mode=0o700)
+    file = valid_state(state)
+    if case == "writable-directory":
+        state.chmod(0o777)
+    elif case == "replaceable-parent":
+        parent.chmod(0o777)
+    elif case == "symlink-parent":
+        link = tmp_path / "linked"
+        link.symlink_to(parent)
+        state = link / "state"
+    elif case == "symlink-directory":
+        link = tmp_path / "linked"
+        link.symlink_to(state)
+        state = link
+    elif case == "symlink-file":
+        file.rename(state / "existing")
+        file.symlink_to(state / "existing")
+    elif case == "dangling-file":
+        file.unlink()
+        file.symlink_to(state / "missing")
+    elif case == "public-file":
+        file.chmod(0o644)
+    elif case == "fifo":
+        file.unlink()
+        os.mkfifo(file, mode=0o600)
+    result = launch(tmp_path, "password", state_dir=state)
+    assert result.returncode != 0 and not result.stdout
+    assert "不安全" in result.stderr
+    if case == "dangling-file":
+        result = launch(tmp_path, state_dir=state)
+        assert result.returncode != 0 and file.is_symlink()
+        assert not (state / "missing").exists()
+
+
+def test_public_sticky_ancestor_protects_private_instance(tmp_path):
+    parent = tmp_path / "temp"
+    parent.mkdir(mode=0o700)
+    parent.chmod(0o1777)
+    state = parent / "state"
+    state.mkdir(mode=0o700)
+    valid_state(state)
+    assert launch(tmp_path, "password", state_dir=state).returncode == 0
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS system /tmp alias")
+def test_macos_tmp_alias_allows_a_private_state_directory(tmp_path):
+    with tempfile.TemporaryDirectory(dir="/tmp") as private:
+        state = Path(private)
+        valid_state(state)
+        assert launch(tmp_path, "password", state_dir=state).returncode == 0
