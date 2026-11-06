@@ -52,7 +52,7 @@ def http_api():
                 '/api/servers': {'items': [{'id': 2, 'name': 'fixture', 'host': 'host', 'port': 22, 'username': 'user', 'password': 'PRIVATE', 'ssh_key': 'PRIVATE'}]},
                 '/api/workloads': {'items': [state['task'], {**TASK, 'id': 8, 'name': 'TRAIN other'}, {**TASK, 'id': 9, 'name': 'site', 'kind': 'website'}]},
                 '/api/workloads/7': state['task'], '/api/workloads/7/observation': OBSERVATION,
-                '/api/workloads/7/log': state['text'], '/api/workloads/7/files': FILES, '/api/workloads/7/text': state['text'],
+                '/api/workloads/7/log': {**state['text'], 'context': OBSERVATION['context']}, '/api/workloads/7/files': FILES, '/api/workloads/7/text': state['text'],
                 '/api/workloads/7/runs': RUNS,
             }.get(parsed.path, {'detail': 'PRIVATE token-secret'})
             self.send_response(state['status'])
@@ -106,7 +106,7 @@ def test_all_tools_use_exact_get_paths_and_preserve_evidence(http_api):
     assert call(api, 'list_tasks', {'query': 'train', 'limit': 1}).structured_content['has_more'] is True
     assert call(api, 'get_task', {'task_id': 7}).structured_content == TASK
     assert call(api, 'observe_task', {'task_id': 7}).structured_content == OBSERVATION
-    assert call(api, 'read_task_log', {'task_id': 7}).structured_content == TEXT
+    assert call(api, 'read_task_log', {'task_id': 7}).structured_content == {**TEXT, 'context': OBSERVATION['context']}
     assert call(api, 'list_task_files', {'task_id': 7}).structured_content == FILES
     assert call(api, 'list_task_files', {'task_id': 7, 'path': '/work/中文 dir'}).structured_content == FILES
     assert call(api, 'read_task_text', {'task_id': 7, 'path': '/work/a 中文.log'}).structured_content == TEXT
@@ -307,7 +307,10 @@ def test_text_reads_preserve_nullable_metadata(http_api, tool, metadata):
     if tool == 'read_task_text': args['path'] = '/work/a 中文.log'
     result = call(api, tool, args)
     assert not result.is_error
-    assert result.structured_content == {**TEXT, **metadata}
+    expected = {**TEXT, **metadata}
+    if tool == 'read_task_log':
+        expected['context'] = OBSERVATION['context']
+    assert result.structured_content == expected
     if tool == 'read_task_log':
         assert state['requests'][-1][:3] == ('GET', '/api/workloads/7/log', {})
     else:
@@ -336,3 +339,16 @@ def test_text_reads_reject_missing_metadata_fields(http_api, tool, field):
     if tool == 'read_task_text': args['path'] = '/work/a 中文.log'
     result = call(api, tool, args)
     assert result.is_error and result.structured_content['error']['code'] == 'invalid_response'
+
+@pytest.mark.parametrize('context', [
+    None,
+    {'workload': {**TASK, 'id': 8}, 'server': {'id': 2}},
+    {'workload': TASK, 'server': {'id': 3}},
+    {'workload': {**TASK, 'log_path': '/previous.log'}, 'server': {'id': 2}},
+])
+def test_bound_log_checks_context_before_returning_text(http_api, context):
+    api, state = http_api
+    state['raw'] = json.dumps({**TEXT, 'context': context}).encode()
+    result = call(api, 'read_task_log', {'task_id': 7})
+    assert result.is_error and result.structured_content['error']['code'] == 'invalid_response'
+    assert TEXT['text'] not in result.model_dump_json()
