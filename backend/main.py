@@ -1,11 +1,13 @@
 """
 PanelLab 后端入口 — 阶段 0/1：Hello 面板 + 登录认证
 """
-import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 from database import engine, Base
 from models import MonitorRemoteConfig, Server, SiteConfig, User, Feedback  # 确保所有模型注册，create_all 会建齐表
@@ -47,7 +49,17 @@ def api_health():
     return {"status": "ok"}
 
 
-# 生产部署：若存在 static 目录（如 Docker 中拷贝的前端 dist），则托管 SPA
-if os.path.isdir(os.path.join(os.path.dirname(__file__), "static")):
-    from starlette.staticfiles import StaticFiles
-    app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True))
+def mount_frontend(application: FastAPI, directory: Path):
+    def frontend_shell():
+        return FileResponse(directory / 'index.html')
+
+    # Vue history routes also need to work when opened from a bookmark.
+    for route in ('login', 'register', 'workspaces', 'monitor', 'sites', 'databases',
+                  'terminal', 'manual', 'feedback', 'settings'):
+        application.add_api_route('/' + route, frontend_shell, methods=['GET', 'HEAD'], include_in_schema=False)
+    application.mount('/', StaticFiles(directory=directory, html=True))
+
+
+static_directory = Path(__file__).with_name('static')
+if static_directory.is_dir():
+    mount_frontend(app, static_directory)
