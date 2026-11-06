@@ -52,7 +52,7 @@ def http_api():
                 '/api/servers': {'items': [{'id': 2, 'name': 'fixture', 'host': 'host', 'port': 22, 'username': 'user', 'password': 'PRIVATE', 'ssh_key': 'PRIVATE'}]},
                 '/api/workloads': {'items': [state['task'], {**TASK, 'id': 8, 'name': 'TRAIN other'}, {**TASK, 'id': 9, 'name': 'site', 'kind': 'website'}]},
                 '/api/workloads/7': state['task'], '/api/workloads/7/observation': OBSERVATION,
-                '/api/workloads/7/files': FILES, '/api/workloads/7/text': state['text'],
+                '/api/workloads/7/log': state['text'], '/api/workloads/7/files': FILES, '/api/workloads/7/text': state['text'],
                 '/api/workloads/7/runs': RUNS,
             }.get(parsed.path, {'detail': 'PRIVATE token-secret'})
             self.send_response(state['status'])
@@ -114,7 +114,7 @@ def test_all_tools_use_exact_get_paths_and_preserve_evidence(http_api):
     assert [(r[0], r[1], r[2]) for r in state['requests']] == [
         ('GET', '/api/servers', {}), ('GET', '/api/workloads', {}), ('GET', '/api/workloads', {}),
         ('GET', '/api/workloads/7', {}), ('GET', '/api/workloads/7/observation', {}),
-        ('GET', '/api/workloads/7', {}), ('GET', '/api/workloads/7/text', {'path': ['/work/a 中文.log']}),
+        ('GET', '/api/workloads/7/log', {}),
         ('GET', '/api/workloads/7/files', {}), ('GET', '/api/workloads/7/files', {'path': ['/work/中文 dir']}),
         ('GET', '/api/workloads/7/text', {'path': ['/work/a 中文.log']}),
         ('GET', '/api/workloads/7/runs', {'limit': ['3'], 'before_id': ['9']})]
@@ -137,7 +137,7 @@ def test_invalid_inputs_rejected_before_http(http_api, tool, args):
 
 def test_unbound_log_is_explicit_error_without_path_guessing(http_api):
     api, state = http_api
-    state['task']['log_path'] = None
+    state.update(status=409, raw=b'{"detail":{"code":"log_unbound"}}')
     result = call(api, 'read_task_log', {'task_id': 7})
     assert result.is_error and result.structured_content['error']['code'] == 'log_unbound'
     assert len(state['requests']) == 1

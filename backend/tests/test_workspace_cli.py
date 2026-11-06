@@ -59,7 +59,7 @@ def test_cli_uses_bearer_same_api_json_input_and_encoded_paths(http_api):
     assert state['requests'][-1] == ('POST','/api/workloads','Bearer token-secret',{'name':'train'})
     result = invoke('--url',url,'logs','7')
     assert result.returncode == 0
-    assert state['requests'][-1][1] == '/api/workloads/7/text?path=%2Fwork%2Fa+%E4%B8%AD%E6%96%87%27s.log'
+    assert state['requests'][-1][1] == '/api/workloads/7/log'
     assert invoke('--url',url,'tasks','remove','7').returncode != 0
     assert invoke('--url',url,'tasks','remove','7','--yes').returncode == 0
     assert state['requests'][-1][:2] == ('DELETE','/api/workloads/7')

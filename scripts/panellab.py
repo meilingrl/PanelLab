@@ -107,8 +107,11 @@ class API:
     def request(self,method,path,*,body=None,query=None,binary=False):
         url = self.url + path
         if query: url += '?' + urllib.parse.urlencode(query)
-        request = urllib.request.Request(url,method=method,data=None if body is None else json.dumps(body).encode('utf-8'),
-                                         headers={'Authorization':'Bearer '+self.token,'Accept':'application/json','Content-Type':'application/json'})
+        headers = {'Accept': 'application/json', 'Content-Type': 'application/json'}
+        if self.token is not None:
+            headers['Authorization'] = 'Bearer ' + self.token
+        request = urllib.request.Request(url, method=method, headers=headers,
+                                         data=None if body is None else json.dumps(body).encode('utf-8'))
         try:
             with self.opener.open(request,timeout=30) as response:
                 limit = DOWNLOAD_LIMIT if binary else JSON_LIMIT
@@ -118,7 +121,14 @@ class API:
                 return json.loads(data)
         except urllib.error.HTTPError as exc:
             # Do not echo untrusted response bodies, URLs, auth headers or exceptions.
-            exc.close()
+            with exc:
+                if exc.code == 409 and path.endswith('/log'):
+                    try:
+                        detail = json.loads(exc.read(4096))['detail']
+                    except (ValueError, KeyError, TypeError, OSError):
+                        detail = None
+                    if isinstance(detail, dict) and detail.get('code') == 'log_unbound':
+                        raise ClientError('log_unbound', 'Workload has no log path', status=409) from None
             raise ClientError('http_error','API request failed',status=exc.code) from None
         except (urllib.error.URLError,OSError,TimeoutError):
             raise ClientError('connection_failed','Cannot reach the API') from None
@@ -144,10 +154,7 @@ def execute(args):
     if args.command == 'observe': return api.request('GET',base+'/observation')
     if args.command == 'files': return api.request('GET',base+'/files',query={'path':args.path} if args.path is not None else None)
     if args.command == 'logs':
-        task = api.request('GET',base)
-        path = task.get('log_path')
-        if not isinstance(path,str) or not path: raise ClientError('log_unbound','Workload has no log path')
-        return api.request('GET',base+'/text',query={'path':path})
+        return api.request('GET',base+'/log')
     if args.command == 'runs':
         if not 1<=args.limit<=50 or (args.before_id is not None and args.before_id<=0):
             raise ClientError('invalid_arguments','Run limit must be 1..50 and cursor positive')
