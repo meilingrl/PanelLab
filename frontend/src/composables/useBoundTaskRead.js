@@ -32,7 +32,7 @@ export function useBoundTaskRead(props, { read, label, available, bindingError, 
   let controller
   let nextTimer
   let ageTimer
-  let attempted = false
+  let hasSettledRead = false
   let consecutiveFailures = 0
   let disposed = false
 
@@ -70,7 +70,6 @@ export function useBoundTaskRead(props, { read, label, available, bindingError, 
     const requestGeneration = ++generation
     controller = new AbortController()
     busy.value = true
-    attempted = true
     // Keep the previous error/stale marker while a retry is in flight.
     try {
       const data = await read(props.task.id, controller.signal)
@@ -99,6 +98,7 @@ export function useBoundTaskRead(props, { read, label, available, bindingError, 
       onDiscontinuity?.(latest.value)
     } finally {
       if (!disposed && requestGeneration === generation) {
+        hasSettledRead = true
         busy.value = false
         controller = undefined
         schedule()
@@ -122,7 +122,7 @@ export function useBoundTaskRead(props, { read, label, available, bindingError, 
   watch(() => taskBinding(props.task, props.server), () => {
     suspend()
     latest.value = null
-    attempted = false
+    hasSettledRead = false
     loadedAt.value = null
     error.value = ''
     blocked.value = false
@@ -134,7 +134,7 @@ export function useBoundTaskRead(props, { read, label, available, bindingError, 
   watch(eligible, active => {
     startAgeTimer()
     if (!active) suspend()
-    else if (!attempted || canFollow()) refresh()
+    else if (!hasSettledRead || canFollow()) refresh()
   }, { immediate: true, flush: 'sync' })
   watch(follow, enabled => {
     if (!enabled) suspend()

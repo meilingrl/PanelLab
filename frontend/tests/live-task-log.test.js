@@ -179,3 +179,14 @@ it('preserves lines when the read settles before the browser delivers its scroll
  pending.resolve(ok(snapshot('new tail'))); await flushPromises()
  expect(pre.text()).toBe('reading now'); expect(pre.element.scrollTop).toBe(100)
 })
+
+it('retries a cancelled first manual read when the user returns', async () => {
+ const first = deferred()
+ read = n => n === 1 ? first.promise : ok(snapshot('current'))
+ open(); await tab('log')
+ await tab('overview'); expect(logCalls[0].signal.aborted).toBe(true)
+ await tab('log'); expect(logCalls).toHaveLength(2)
+ first.resolve(ok(snapshot('cancelled'))); await flushPromises()
+ expect(wrapper.get('pre').text()).toBe('current')
+ await tab('overview'); await tab('log'); expect(logCalls).toHaveLength(2)
+})
