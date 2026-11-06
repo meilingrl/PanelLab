@@ -5,13 +5,16 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 ENTRY = Path(__file__).resolve().parents[1] / "local_panel.py"
 
 
-def launch(tmp_path, *args):
+def launch(tmp_path, *args, state_dir=None, **environment):
     return subprocess.run(
-        [sys.executable, str(ENTRY), *args, "--state-dir", str(tmp_path / "state")],
-        env={**os.environ, "PATH": str(tmp_path), "SECRET_KEY": "ambient-example"},
+        [sys.executable, str(ENTRY), *args, "--state-dir", str(state_dir or tmp_path / "state")],
+        env={**os.environ, "PATH": str(tmp_path), "SECRET_KEY": "ambient-example",
+             "DOCKER_HOST": "unix:///fixture.sock", "DOCKER_CONTEXT": "", **environment},
         capture_output=True, text=True, timeout=10,
     )
 
@@ -46,10 +49,11 @@ def test_showing_password_before_setup_does_not_create_an_instance(tmp_path):
 
 def test_stop_refuses_state_pointing_to_an_unrelated_compose_project(tmp_path):
     state = tmp_path / "state"
-    state.mkdir()
+    state.mkdir(mode=0o700)
     keys = ("MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "SECRET_KEY", "INIT_ADMIN_PASSWORD")
     config = {key: "a" * 48 for key in keys}
     (state / "panellab-local.json").write_text(json.dumps({**config, "project": "production"}))
+    (state / "panellab-local.json").chmod(0o600)
     docker = tmp_path / "docker"
     docker.write_text("#!/bin/sh\necho 'docker invoked' >&2\nexit 0\n")
     docker.chmod(0o700)
@@ -57,3 +61,39 @@ def test_stop_refuses_state_pointing_to_an_unrelated_compose_project(tmp_path):
     assert result.returncode != 0
     assert "实例配置无效" in result.stderr
     assert "docker invoked" not in result.stderr
+
+
+def docker_recording_endpoint(tmp_path):
+    docker = tmp_path / "docker"
+    docker.write_text(
+        '#!/bin/sh\n'
+        'if [ "$1" = context ]; then echo "$FIXTURE_CONTEXT_HOST"; exit 0; fi\n'
+        'printf "%s|%s|%s\\n" "$1 $2" "$DOCKER_HOST" "$DOCKER_CONTEXT" >> "$CALLS"\n'
+    )
+    docker.chmod(0o700)
+    return tmp_path / "calls"
+
+
+@pytest.mark.parametrize(("host", "context"), [
+    ("tcp://fixture.invalid:2375", ""), ("", "remote"), ("", ""), ("unix:///fixture.sock", "remote"),
+])
+def test_refuses_remote_docker_before_seeding_or_building(tmp_path, host, context):
+    calls = docker_recording_endpoint(tmp_path)
+    result = launch(tmp_path, DOCKER_HOST=host, DOCKER_CONTEXT=context,
+                    FIXTURE_CONTEXT_HOST="ssh://fixture.invalid", CALLS=str(calls))
+    assert result.returncode != 0
+    assert "本机 Docker" in result.stderr
+    assert not (tmp_path / "state").exists()
+    assert not calls.exists()
+
+
+def test_build_and_compose_are_pinned_to_inspected_socket(tmp_path):
+    calls = docker_recording_endpoint(tmp_path)
+    local = "unix:///colima/default/docker.sock"
+    result = launch(tmp_path, DOCKER_HOST="", DOCKER_CONTEXT="colima",
+                    FIXTURE_CONTEXT_HOST=local, CALLS=str(calls))
+    assert result.returncode == 0, result.stderr
+    commands = [line.split("|") for line in calls.read_text().splitlines()]
+    assert any(command.startswith("build ") for command, _, _ in commands)
+    assert any(command.startswith("compose --project-name") for command, _, _ in commands)
+    assert all(host == local and context == "" for _, host, context in commands)

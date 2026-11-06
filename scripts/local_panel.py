@@ -34,8 +34,30 @@ def load_instance(directory, create):
     return instance
 
 
-def compose_cli():
-    if subprocess.run(["docker", "compose", "version"], capture_output=True).returncode == 0:
+def local_docker_env():
+    env = os.environ.copy()
+    host = env.pop("DOCKER_HOST", "")
+    context = env.pop("DOCKER_CONTEXT", "")
+    validate = r"unix:///[^?#\s]+"
+    if host and not re.fullmatch(validate, host):
+        raise ValueError("本机 Docker 启动器仅支持 Unix 套接字，请检查 DOCKER_HOST。")
+    if context or not host:
+        # context inspect reads local CLI configuration without contacting the daemon.
+        command = ["docker", "context", "inspect", "--format", '{{(index .Endpoints "docker").Host}}']
+        if context:
+            command += ["--", context]
+        selected = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+        host = selected.stdout.strip()
+    if not re.fullmatch(validate, host):
+        raise ValueError("请选择使用 Unix 套接字的本机 Docker context。")
+    env["DOCKER_HOST"] = host
+    for key in ("DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "BUILDX_BUILDER", "BUILDKIT_HOST"):
+        env.pop(key, None)
+    return env
+
+
+def compose_cli(env):
+    if subprocess.run(["docker", "compose", "version"], env=env, capture_output=True).returncode == 0:
         return ["docker", "compose"]
     if shutil.which("docker-compose"):
         return ["docker-compose"]
@@ -51,6 +73,7 @@ def main():
     if not 1 <= args.port <= 65535:
         parser.error("--port 取值范围为 1–65535")
     directory = args.state_dir.expanduser().resolve()
+    docker_env = local_docker_env() if args.action != "password" else None
     start = args.action == "start"
     if start:
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -65,12 +88,12 @@ def main():
         if args.action == "password":
             print(instance["INIT_ADMIN_PASSWORD"])
             return
-        compose = compose_cli()
+        compose = compose_cli(docker_env)
         project = instance["project"]
         compose += ["--project-name", project, "--env-file", os.devnull, "-f", str(ROOT / "compose.local.yaml")]
-        env = {**os.environ, **{key: instance[key] for key in SECRET_KEYS}, "PANEL_LOCAL_PORT": str(args.port)}
+        env = {**docker_env, **{key: instance[key] for key in SECRET_KEYS}, "PANEL_LOCAL_PORT": str(args.port)}
         if start:
-            subprocess.run(["docker", "build", "-t", project + "-app:local", str(ROOT)], check=True)
+            subprocess.run(["docker", "build", "-t", project + "-app:local", str(ROOT)], env=docker_env, check=True)
             subprocess.run(compose + ["up", "--wait", "--wait-timeout", "180"], env=env, check=True)
             print(f"PanelLab 已就绪：http://127.0.0.1:{args.port}  用户名：admin")
             print("查看初始密码：将 password 加到启动命令中。")
