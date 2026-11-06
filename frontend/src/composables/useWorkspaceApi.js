@@ -37,6 +37,7 @@ export const workspaceApi={
   updateTask:(id,body)=>request(`/workloads/${id}`,{method:'PATCH',body}),
   deleteTask:(id)=>request(`/workloads/${id}`,{method:'DELETE'}),
   observation:(id,signal)=>request(`/workloads/${id}/observation`,{signal}),
+  taskLog:(id,signal)=>request(`/workloads/${id}/log`,{signal}),
   files:(id,path,signal)=>request(`/workloads/${id}/files${query({path})}`,{signal}),
   text:(id,path,signal)=>request(`/workloads/${id}/text${query({path})}`,{signal}),
   download:(id,path,signal)=>request(`/workloads/${id}/download${query({path})}`,{binary:true,signal}),

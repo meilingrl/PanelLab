@@ -10,7 +10,7 @@ from models.user import User
 from models.workload import Workload, ReportedRun
 from routers.auth import get_current_user
 from schemas.workloads import WorkloadCreate, WorkloadPatch, RunCreate
-from services import workloads as service
+from services import remote_connection, workloads as service
 
 router = APIRouter(prefix='/api/workloads', tags=['workloads'])
 DB = Annotated[Session, Depends(get_db)]
@@ -71,11 +71,24 @@ def files(workload_id: int, db: DB, user: Owner, path: str | None = None):
     return service.files(db,user,service.owned(db,user,workload_id),path)
 
 
+def text_preview(db, user, row, path):
+    data, metadata = service.read_file(db, user, row, path)
+    return {**metadata, 'text': data.decode('utf-8', errors='replace')}
+
+
+@router.get('/{workload_id}/log')
+def bound_log(workload_id: int, db: DB, user: Owner):
+    row = service.owned(db, user, workload_id)
+    if not row.log_path:
+        raise HTTPException(409, detail={'code': 'log_unbound', 'message': 'No log file is bound to this task'})
+    server = remote_connection.owned_server(db, user, row.server_id)
+    preview = text_preview(db, user, row, row.log_path)
+    return {**preview, 'context': service.binding_context(row, server)}
+
+
 @router.get('/{workload_id}/text')
 def text(workload_id: int, db: DB, user: Owner, path: str):
-    row = service.owned(db,user,workload_id)
-    data, metadata = service.read_file(db,user,row,path)
-    return {**metadata,'text':data.decode('utf-8',errors='replace')}
+    return text_preview(db, user, service.owned(db, user, workload_id), path)
 
 
 @router.get('/{workload_id}/download')

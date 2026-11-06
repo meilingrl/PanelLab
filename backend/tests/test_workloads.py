@@ -70,7 +70,7 @@ def test_metadata_ownership_partial_updates_and_server_delete_guard(workspace):
     assert client.delete('/api/servers/71').status_code == 409
     before = state['calls']
     client.headers['Authorization'] = 'Bearer ' + _create_token('other')
-    for suffix in ('','/observation','/files','/text?path='+LOG,'/download?path='+LOG,'/runs'):
+    for suffix in ('','/observation','/log','/files','/text?path='+LOG,'/download?path='+LOG,'/runs'):
         assert client.get(f'/api/workloads/{task}'+suffix).status_code == 404
     assert client.patch(f'/api/workloads/{task}',json={'name':'steal'}).status_code == 404
     assert client.delete(f'/api/workloads/{task}').status_code == 404
@@ -237,3 +237,26 @@ def test_lost_sftp_during_log_lookup_is_unavailable_not_fresh_missing(workspace,
     assert 'private transport detail' not in result.text
     assert 'observed_at' not in result.json()
     assert client.get(f'/api/workloads/{task}/text',params={'path':LOG}).status_code == 503
+
+def test_bound_log_tracks_current_binding_and_snapshots(workspace):
+    client, sftp, state = workspace
+    task = create(workspace)
+    url = f'/api/workloads/{task}'
+    context = client.get(url + '/observation').json()['context']
+    sftp.data[LOG] = b'a' * 70000 + b'END'
+    first = client.get(url + '/log').json()
+    assert first['context'] == context
+    assert first['path'] == LOG and first['truncated']
+    assert len(first['text']) == 65536 and first['text'].endswith('END')
+
+    replacement = ROOT + '/new.log'
+    sftp.data[replacement] = b'new run'
+    assert client.patch(url, json={'log_path': replacement}).status_code == 200
+    second = client.get(url + '/log', params={'path': LOG}).json()
+    assert second['text'] == 'new run'
+    assert second['context']['workload']['log_path'] == second['path'] == replacement
+    assert client.patch(url, json={'log_path': None}).status_code == 200
+    before = state['calls']
+    unbound = client.get(url + '/log')
+    assert unbound.status_code == 409 and unbound.json()['detail']['code'] == 'log_unbound'
+    assert state['calls'] == before

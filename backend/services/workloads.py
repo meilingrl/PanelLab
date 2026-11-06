@@ -64,10 +64,17 @@ def serialize(row):
     return result
 
 
+def binding_context(row, server):
+    fields = ('id', 'server_id', 'root_path', 'log_path', 'pid', 'process_identity')
+    return {
+        'workload': {key: getattr(row, key) for key in fields},
+        'server': {'id': server.id, **connection.target(server)},
+    }
+
+
 def observation(db, user, row):
     server = connection.owned_server(db, user, row.server_id)
-    context = {'workload': {key: getattr(row, key) for key in ('id', 'server_id', 'root_path', 'log_path', 'pid', 'process_identity')},
-               'server': {'id': server.id, **connection.target(server)}}
+    context = binding_context(row, server)
     with connection.open_remote(db, user, row.server_id) as client:
         snapshot = remote_probe.collect_snapshot(client, pid=row.pid)
         warnings = list(snapshot['warnings'])
