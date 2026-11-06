@@ -56,7 +56,8 @@ def mount_frontend(application: FastAPI, directory: Path):
     # Vue history routes also need to work when opened from a bookmark.
     for route in ('login', 'register', 'workspaces', 'monitor', 'sites', 'databases',
                   'terminal', 'manual', 'feedback', 'settings'):
-        application.add_api_route('/' + route, frontend_shell, methods=['GET', 'HEAD'], include_in_schema=False)
+        for path in ('/' + route, '/' + route + '/'):
+            application.add_api_route(path, frontend_shell, methods=['GET', 'HEAD'], include_in_schema=False)
     application.mount('/', StaticFiles(directory=directory, html=True))
 
 

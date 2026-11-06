@@ -10,7 +10,7 @@ def test_workspace_deep_links_and_missing_assets(tmp_path):
     app = FastAPI()
     mount_frontend(app, tmp_path)
     client = TestClient(app)
-    for route in ('/', '/login', '/workspaces', '/workspaces?view=tasks'):
+    for route in ('/', '/login', '/workspaces', '/workspaces?view=tasks', '/workspaces/', '/login/'):
         response = client.get(route)
         assert response.status_code == 200
         assert response.text == 'workspace shell'
