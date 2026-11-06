@@ -4,6 +4,7 @@ import getpass
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import urllib.parse
@@ -38,13 +39,14 @@ def configured_api(args):
     return mcp_api(base_url(args.url, args.allow_insecure), token_from(args), args.allow_insecure)
 
 
-def client_config(args):
+def client_config(args, token_path=None):
     """Generate paths only: never load a credential or modify a client host."""
     url = base_url(args.url, args.allow_insecure)
     if not args.token_file:
         raise ClientError('token_file_required', '--print-config requires --token-file')
-    command_args = [str(Path(__file__).resolve()), '--url', url,
-                    '--token-file', str(Path(args.token_file).expanduser().resolve())]
+    if token_path is None:
+        token_path = Path(args.token_file).expanduser().resolve()
+    command_args = [str(Path(__file__).resolve()), '--url', url, '--token-file', str(token_path)]
     if args.allow_insecure:
         command_args.append('--allow-insecure')
     # Do not resolve the Python symlink: a virtualenv must retain its interpreter path.
@@ -86,6 +88,23 @@ def save_new_token(target, token):
         raise ClientError('save_failed', 'Cannot save the credential; check the directory and available space') from None
 
 
+def prepare_credential_directory(parent):
+    """Create missing directories privately and ensure others cannot replace the destination."""
+    uid = os.getuid()
+    for directory in (*reversed(parent.parents), parent):
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            directory.mkdir(mode=0o700, exist_ok=True)
+            info = directory.lstat()
+        # A sticky ancestor such as /tmp protects the next user-owned directory.
+        replaceable = info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, uid) or replaceable:
+            raise ClientError('unsafe_directory', 'Choose a private credential directory under your home')
+    if info.st_uid != uid or info.st_mode & 0o022:
+        raise ClientError('unsafe_directory', 'Use a credential directory owned by you and writable only by you')
+
+
 def setup(args):
     if os.name != 'posix':
         raise ClientError('unsupported_platform', '--setup requires a POSIX credential file and terminal')
@@ -100,11 +119,8 @@ def setup(args):
 
     # Resolve only the parent. Exclusive publication must refuse even a dangling symlink.
     target = target.parent.resolve() / target.name
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    parent = target.parent.stat()
-    if parent.st_uid != os.getuid() or parent.st_mode & 0o022:
-        raise ClientError('unsafe_directory', 'Use a credential directory owned by you and writable only by you')
-    config = client_config(args)
+    prepare_credential_directory(target.parent)
+    config = client_config(args, target)
     api = mcp_api(url, None)
     result = api.request('POST', '/api/auth/login', body=hidden_credentials())
     token = result.get('token') if isinstance(result, dict) else None

@@ -316,3 +316,26 @@ def test_check_for_setup_config_keeps_loopback_bearer_off_proxies(tmp_path, api,
     result = run_entry('--check', '--url', url, '--token-file', str(target), cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert state['requests'] == [('GET', '/api/servers', 'Bearer new-token')]
+
+
+def test_setup_creates_private_intermediate_directories_even_with_open_umask(tmp_path, api, setup_entry, capsys):
+    url, _ = api
+    target = tmp_path / 'outer' / 'inner' / 'token'
+    previous = os.umask(0)
+    try:
+        assert setup_entry(['--setup', '--url', url, '--token-file', str(target)]) == 0
+    finally:
+        os.umask(previous)
+    assert target.parent.parent.stat().st_mode & 0o777 == 0o700
+    assert target.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_setup_rejects_private_dir_replaceable_by_others(tmp_path, api, setup_entry, capsys):
+    url, state = api
+    shared = tmp_path / 'shared'
+    private = shared / 'private'
+    private.mkdir(parents=True, mode=0o700)
+    shared.chmod(0o777)
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(private / 'token')]) != 0
+    assert not state['requests'] and list(private.iterdir()) == []
+    assert capsys.readouterr().out == ''
