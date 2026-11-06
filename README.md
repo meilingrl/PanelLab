@@ -10,17 +10,15 @@
 
 ## 快速开始
 
-```bash
-# 1. 创建 MySQL 数据库并配置 backend/.env（见下方「环境配置」）
-# 2. 后端
-cd backend && python -m venv .venv && .venv\Scripts\activate  # Windows
-pip install -r requirements.txt && python -m init_db && uvicorn main:app --reload
+在 macOS 或 Linux 上启动本机 Docker，并准备 Python 3 和支持 `up --wait` 的 Docker Compose。在项目根目录执行：
 
-# 3. 前端（新开终端）
-cd frontend && npm install && npm run dev
+```bash
+python3 scripts/local_panel.py
 ```
 
-浏览器访问前端提示的地址（如 http://localhost:5173），默认账号 `admin`，密码见 `.env` 中 `INIT_ADMIN_PASSWORD`（默认 `admin`）。
+看到“PanelLab 已就绪”后，打开 [本机面板](http://127.0.0.1:8765)，用 `admin` 登录。初始密码由本机随机生成，在自己的终端运行 `python3 scripts/local_panel.py password` 查看。登录后进入「任务工作区」添加服务器。
+
+`python3 scripts/local_panel.py stop` 停止服务，下次执行启动命令会保留账号与数据。首次构建需要联网下载镜像和软件依赖。自选端口、凭据保存位置与故障定位见[本地启动说明](docs/deploy/deploy.md)。前后端分开开发或使用 Windows 原生环境时，见下方「环境配置」与「运行与登录」。
 
 ---
 

@@ -8,7 +8,24 @@
 
 ## 一、Docker 本地演示
 
-### 1.1 使用 docker-compose（含 MySQL）
+### 1.1 启动本机面板（macOS / Linux）
+
+前置条件为 Python 3、本机 Docker 引擎，以及支持 `up --wait` 的 Docker Compose。在项目根目录执行：
+
+```bash
+python3 scripts/local_panel.py           # 等待 MySQL 就绪，建表并启动打包的前后端
+python3 scripts/local_panel.py password  # 仅在自己的终端查看初始管理员密码
+```
+
+打开 [本机面板](http://127.0.0.1:8765)，账号为 `admin`。首次构建会联网下载镜像、npm 和 Python 依赖。应用容器启用生产模式的登录限制，Web 仅绑定本机回环地址，MySQL 只在该 Compose 项目的网络中提供服务。
+
+- **暂停与继续**。执行 `python3 scripts/local_panel.py stop`，之后运行原启动命令。每次启动会复用镜像构建缓存，已有用户跳过初始化。修改过登录密码后，请用新密码登录。
+- **自选端口**。例如 `python3 scripts/local_panel.py --port 8766`。每次启动传入同一端口即可使用同一浏览器地址。
+- **凭据与数据**。首次运行在 `data/local-panel/panellab-local.json` 中生成独立的项目名、初始管理员密码、数据库口令以及签名和加密使用的 `SECRET_KEY`。此文件仅允许当前用户读写。MySQL 数据在该项目的 Docker 命名卷中。备份或迁移时请同时保存该文件和数据库。容器管理员能查看容器配置。
+- **隔离第二套面板**。在启动命令中同时指定 `--state-dir /另一个私有目录 --port 8767`。查看初始密码、日志、停止或重新启动时沿用相同的 `--state-dir`。
+- **排查失败**。构建失败时检查 Docker 引擎、镜像仓库及依赖源的网络连接，修复后重试启动命令。容器启动失败可运行 `python3 scripts/local_panel.py logs` 查看最近日志。MySQL 报 `No space left on device` 时检查 Docker 引擎的数据盘空间。端口占用时改用空闲端口。
+
+### 1.2 旧版演示配置（固定口令）
 
 1. **克隆并进入项目目录**
    ```bash
@@ -36,7 +53,7 @@
    - 浏览器打开：http://localhost:8000  
    - 前端已打包进镜像，由后端托管根路径，无需单独起前端。
 
-### 1.2 仅使用 Dockerfile（自备 MySQL）
+### 1.3 仅使用 Dockerfile（自备 MySQL）
 
 若已有 MySQL 服务：
 
