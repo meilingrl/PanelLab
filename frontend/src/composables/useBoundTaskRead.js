@@ -3,7 +3,7 @@ import { taskBinding } from './workspaceBinding'
 import { observationContextMatches } from './observationRates'
 
 /** A single bounded read, optionally repeated while this task view is visible. */
-export function useBoundTaskRead(props, { read, label, available, bindingError, onSample, onDiscontinuity }) {
+export function useBoundTaskRead(props, { read, label, available, matchesResource, bindingError, onSample, onDiscontinuity }) {
   const latest = ref(null)
   const error = ref('')
   const busy = ref(false)
@@ -74,7 +74,7 @@ export function useBoundTaskRead(props, { read, label, available, bindingError, 
     try {
       const data = await read(props.task.id, controller.signal)
       if (disposed || requestGeneration !== generation) return
-      if (!observationContextMatches(data, props.task, props.server)) {
+      if (!observationContextMatches(data, props.task, props.server) || (matchesResource && !matchesResource(data))) {
         blockBinding()
         return
       }

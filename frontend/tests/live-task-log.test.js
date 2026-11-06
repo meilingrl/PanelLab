@@ -6,7 +6,7 @@ vi.mock('vue-router', () => ({ useRouter: () => ({}) }))
 vi.mock('../src/composables/useTerminalStore', () => ({ useTerminalStore: () => ({}) }))
 const task = { id: 1, name: 'Train', server_id: 2, root_path: '/run', log_path: '/run/log', pid: null, process_identity: null }
 const server = { id: 2, host: 'fixture', port: 22, username: 'lab' }
-const snapshot = (text, workload = task) => ({ text, context: { workload, server } })
+const snapshot = (text, workload = task) => ({ text, path: workload.log_path, context: { workload, server } })
 const ok = data => ({ ok: true, json: async () => data })
 const failure = (code, message) => ({ ok: false, status: 409, json: async () => ({ detail: { code, message } }) })
 function deferred() {
@@ -114,6 +114,7 @@ it('backs off after failures, retains the last good text through retries and all
 
 it.each([
  ['new context', () => ok(snapshot('foreign log', { ...task, root_path: '/changed' }))],
+ ['wrong file', () => ok({ ...snapshot('foreign log'), path: '/elsewhere.log' })],
  ['unbound on server', () => failure('log_unbound', 'log removed')],
 ])('stops on %s until refreshed task metadata and a successful manual verification', async (_, mismatch) => {
  open(); await tab('log'); read = mismatch; await follow()

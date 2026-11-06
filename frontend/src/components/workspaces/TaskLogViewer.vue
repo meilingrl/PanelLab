@@ -17,6 +17,7 @@ const {
   read: workspaceApi.taskLog,
   label: '日志',
   available: () => !!props.task.log_path,
+  matchesResource: data => data.path === props.task.log_path,
   bindingError: err => err.code === 'log_unbound',
   onSample() {
     // The viewport can move before the browser dispatches its scroll event.
