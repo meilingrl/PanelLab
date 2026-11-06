@@ -24,7 +24,7 @@ function fixture(path, options={}) {
  if(path.includes('/snapshot'))return response({processes:[{pid:42,identity:'boot:12',command:'python train.py',cwd:'/home/lab/run A'}],warnings:[]})
  if(path.includes('/files')){const root=new URL(path,'http://fixture').searchParams.get('path')||'/home/lab';return response({cwd:root,parent:root==='/home/lab'?'/home':'/home/lab',entries:[{name:'run A',path:'/home/lab/run A',type:'directory'},{name:'中文.log',path:'/home/lab/run A/中文.log',type:'file'},{name:'link',path:root+'/link',type:'symlink',disabled:true}]})}
  if(path.endsWith('/observation'))return response({context:{workload:{...task,id:Number(path.split('/')[3])},server},workload_id:Number(path.split('/')[3]),observed_at:'2026-11-03T00:00:00Z',process_status:'unknown',system:{network:[{name:'eth0',received_bytes:123,sent_bytes:456}]},warnings:['PID unavailable']})
- if(path.includes('/text'))return response({text:'epoch 1 <script>raw</script>',truncated:true,size:80000})
+ if(path.endsWith('/log'))return response({context:{workload:task,server},text:'epoch 1 <script>raw</script>',truncated:true,size:80000})
  if(path.includes('/download'))return response({})
  if(path.includes('/runs'))return response({items:[{id:1,status:'succeeded',source:'reported',summary:'operator says complete',started_at:'2026-11-03T00:00:00Z'}]})
  if(options.method==='DELETE')return response({deleted:true})
@@ -69,7 +69,7 @@ it('log refresh failure preserves text and marks it stale; download uses bearer 
  const w=mountIt(TaskDetail,{task,server});await flushPromises()
  await w.get('[data-testid="tab-log"]').trigger('click');await flushPromises()
  expect(w.get('pre').text()).toContain('<script>raw</script>');expect(w.find('script').exists()).toBe(false)
- fetch.mockImplementation(async(url,o)=>url.includes('/text')?response({detail:{message:'offline'}},false):fixture(url,o))
+ fetch.mockImplementation(async(url,o)=>url.endsWith('/log')?response({detail:{message:'offline'}},false):fixture(url,o))
  await w.get('[data-testid="refresh-log"]').trigger('click');await flushPromises()
  expect(w.get('pre').text()).toContain('epoch 1');expect(w.text()).toContain('已过期')
  await w.get('[data-testid="tab-files"]').trigger('click');await flushPromises()
