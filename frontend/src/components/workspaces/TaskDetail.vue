@@ -12,6 +12,9 @@ const props=defineProps({task:{type:Object,required:true},server:Object,metadata
 const emit=defineEmits(['edit','deleted','refresh-task-info'])
 const router=useRouter(),terminal=useTerminalStore()
 const tab=ref('overview'),directory=ref(props.task.root_path),confirmDelete=ref(false),deleting=ref(false),opening=ref(false),error=ref(''),copied=ref('')
+// Quote the actual panel origin for the POSIX shell example, including custom ports.
+const quotedOrigin = "'" + window.location.origin.replaceAll("'", "'\\''") + "'"
+const cliExample = computed(() => `python scripts/panellab.py --url ${quotedOrigin} --token-file /secure/panel-token observe ${props.task.id}`)
 const binding=computed(()=>taskBinding(props.task,props.server))
 let generation=0,terminalController
 watch(binding,()=>{generation++;terminalController?.abort();tab.value='overview';directory.value=props.task.root_path;confirmDelete.value=false;error.value='';copied.value='';deleting.value=false;opening.value=false})
@@ -31,7 +34,7 @@ const tabs={overview:'概览',log:'日志',files:'文件',runs:'上报记录'}
   <div class="ws-tabs" role="tablist" aria-label="任务详情"><button v-for="(label,key) in tabs" :id="'tab-'+task.id+'-'+key" :key="key" :data-testid="'tab-'+key" role="tab" :aria-selected="tab===key" :aria-controls="'pane-'+task.id" @click="tab=key">{{ label }}</button></div>
   <div :id="'pane-'+task.id" class="ws-detail-content" role="tabpanel" :aria-labelledby="'tab-'+task.id+'-'+tab">
    <div v-show="tab==='overview'"><ObservationPanel :key="binding" :task="task" :server="server" :active="tab==='overview'" :metadata-revision="metadataRevision" @refresh-task-info="emit('refresh-task-info')" /><dl class="ws-facts"><div v-if="task.website_url"><dt>网站地址</dt><dd><a :href="task.website_url" target="_blank" rel="noopener noreferrer">{{ task.website_url }}</a></dd></div><div v-if="task.schedule_note"><dt>计划说明</dt><dd>{{ task.schedule_note }}</dd></div><div v-if="task.notes"><dt>备注</dt><dd>{{ task.notes }}</dd></div></dl>
-   <details class="ws-cli"><summary>使用 CLI 查看同一任务</summary><code class="ws-wrap">python scripts/panellab.py --token-file /secure/panel-token observe {{ task.id }}</code><button @click="copy(`python scripts/panellab.py --token-file /secure/panel-token observe ${task.id}`,'CLI 示例')">复制 CLI 示例</button><p class="ws-muted">令牌文件路径为占位示例，请替换为你的安全令牌文件。</p></details><p v-if="copied" role="status">{{ copied }}</p>
+   <details class="ws-cli"><summary>使用 CLI 查看同一任务</summary><code class="ws-wrap">{{ cliExample }}</code><button @click="copy(cliExample,'CLI 示例')">复制 CLI 示例</button><p class="ws-muted">令牌文件路径为占位示例，请替换为你的安全令牌文件。</p></details><p v-if="copied" role="status">{{ copied }}</p>
    <div class="ws-danger-zone"><button data-testid="delete-task" @click="confirmDelete=true">取消登记此任务</button><div v-if="confirmDelete" role="alertdialog" aria-label="确认取消登记"><strong>仅删除任务登记及其上报记录。远程进程和文件保持不变。</strong><div class="ws-actions"><button data-testid="confirm-delete" :disabled="deleting" @click="remove">{{ deleting?'取消登记中…':'确认取消登记' }}</button><button :disabled="deleting" @click="confirmDelete=false">保留任务</button></div></div></div></div>
    <TaskLogViewer :key="binding+'-log'" :task="task" :server="server" :active="tab==='log'" :metadata-revision="metadataRevision" @refresh-task-info="emit('refresh-task-info')" />
    <FileExplorer v-if="tab==='files'" :key="binding+'-files'" :task="task" @directory="directory=$event" />

@@ -20,10 +20,10 @@ SDK 固定为 `mcp==2.3.0`，安装在适配器自己的虚拟环境中。只有
 
 ## 2. 登录并取得客户端配置
 
-在 macOS 或 Linux 的交互终端运行下面的命令。登录本机面板可直接使用示例地址，登录远程面板请改为实际的 HTTPS 地址。使用自己的账号和一个新的凭据文件名。
+在 macOS 或 Linux 的交互终端运行下面的命令。请以启动命令打印的面板地址为准。本地启动器默认使用 8765 端口，单独启动的开发后端默认使用 8000。连接远程面板时填入实际的 HTTPS 地址。使用自己的账号和一个新的凭据文件名。
 
 ```sh
-PANEL_URL="http://127.0.0.1:8000"
+PANEL_URL="http://127.0.0.1:8765"
 TOKEN_FILE="$HOME/.config/panellab/mcp.token"
 "$MCP_PY" "$PANEL_ROOT/scripts/panellab_mcp.py" \
   --setup --url "$PANEL_URL" --token-file "$TOKEN_FILE"

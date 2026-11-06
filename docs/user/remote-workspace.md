@@ -28,6 +28,12 @@ CPU区间占比和每个网卡的收发速率需要两次有效采样；首次�
 
 连接失败时保留旧数据和时间并标记过期，自动重试逐步延后，最长60秒。若提示任务配置变化，先刷新任务信息；若信息没有变化仍需手动重试，成功核对上下文后才恢复跟随，避免无限重试错误配置。
 
+## 跟随训练或早报的日志
+
+在任务详情点「日志」，即可读取之前选好的文件。开启「自动跟随日志」后，每次读完等待 2–60 秒再取一次，默认等待 5 秒。每次取最新的 64 KiB；文件轮换后会直接显示新文件的末尾。两次读取之间若写入超过 64 KiB，较早的行可能跳过。
+
+想看刚才的报错时，向上翻页会固定眼前的文本和位置。点「回到最新日志」即可看到最新一次读取。切换页签或隐藏窗口会暂停读取；连接失败会保留上次的文本和时间。若其他人或 Agent 更换了任务绑定，先按提示刷新任务信息，再继续读取。
+
 ## 查看与取回结果
 
 详情中查看采集时间和模块可用性。日志以文本显示，最多读取尾部64KiB；文件树支持进入目录、预览文本和下载文件。缺少GPU工具时显示不可用，不能将它解读为GPU利用率为零。
@@ -42,10 +48,11 @@ CLI通过同一API访问同一账号下的数据，不直接另走SSH。先按CL
 
 ```bash
 python scripts/panellab.py --help
-python scripts/panellab.py tasks list
-python scripts/panellab.py observe 1
-python scripts/panellab.py logs 1
-python scripts/panellab.py files 1
+PANEL_URL="http://127.0.0.1:8765"  # 以本地启动输出为准
+python scripts/panellab.py --url "$PANEL_URL" tasks list
+python scripts/panellab.py --url "$PANEL_URL" observe 1
+python scripts/panellab.py --url "$PANEL_URL" logs 1
+python scripts/panellab.py --url "$PANEL_URL" files 1
 ```
 
 `observe`返回的`sampling`包含服务器启动身份和单调采样时间，CPU ticks、网卡累计字节与ifindex是计算区间值的原始证据；单次API响应不编造百分比。`context`提供该次观测对应的任务/服务器绑定，不含连接密码。
