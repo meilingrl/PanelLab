@@ -1,4 +1,5 @@
 """Onboarding modes exercise the entry as a stdlib-only subprocess."""
+import getpass
 import importlib.util
 import json
 import os
@@ -7,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -29,11 +31,19 @@ def api():
          'username': 'PRIVATE-user', 'password': 'PRIVATE-password'}]}}
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args): pass
+        def reply(self, status, payload):
+            self.send_response(status)
+            if 300 <= status < 400:
+                self.send_header('Location', '/PRIVATE-redirect')
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            state['requests'].append((self.command, self.path, self.headers.get('Authorization'), body))
+            self.reply(state.get('login_status', 200), state.get('login_payload', {'token': 'PRIVATE-new-token'}))
         def do_GET(self):
             state['requests'].append((self.command, self.path, self.headers.get('Authorization')))
-            self.send_response(state['status'])
-            self.end_headers()
-            self.wfile.write(json.dumps(state['payload']).encode())
+            self.reply(state['status'], state['payload'])
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -162,3 +172,147 @@ def test_help_and_missing_sdk_serve_keep_stdio_clean(tmp_path):
     missing_sdk = run_entry(cwd=tmp_path)
     assert missing_sdk.returncode != 0 and missing_sdk.stdout == ''
     assert 'requirements-mcp.txt' in missing_sdk.stderr and SECRET not in missing_sdk.stderr
+
+
+@pytest.fixture
+def setup_entry(monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import panellab_mcp
+    credentials = iter(('PRIVATE-user', 'PRIVATE-pass'))
+    monkeypatch.setattr(getpass, 'getpass', lambda prompt: next(credentials))
+    monkeypatch.setenv('PANEL_TOKEN', SECRET)
+    return panellab_mcp.main
+
+
+def test_setup_logs_in_checks_and_prints_existing_config(tmp_path, api, setup_entry, capsys):
+    url, state = api
+    target = tmp_path / '新 目录' / '面板.token'
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(target)]) == 0
+    output = capsys.readouterr()
+    assert 'PRIVATE' not in output.out + output.err
+    assert json.loads(output.out) == {'mcpServers': {'panellab': {
+        'command': str(Path(sys.executable).absolute()),
+        'args': [str(ENTRY), '--url', url, '--token-file', str(target)]}}}
+    assert target.read_text() == 'PRIVATE-new-token\n'
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert target.parent.stat().st_mode & 0o777 == 0o700
+    assert list(target.parent.iterdir()) == [target]
+    assert state['requests'] == [
+        ('POST', '/api/auth/login', None, {'username': 'PRIVATE-user', 'password': 'PRIVATE-pass'}),
+        ('GET', '/api/servers', 'Bearer PRIVATE-new-token')]
+
+
+@pytest.mark.parametrize('changes,paths', [
+    ({'login_status': 302}, ['/api/auth/login']),
+    ({'login_status': 401}, ['/api/auth/login']),
+    ({'login_payload': {'token': 'PRIVATE\x7f'}}, ['/api/auth/login']),
+    ({'login_payload': {'token': 'PRIVATE\nInjected'}}, ['/api/auth/login']),
+    ({'login_payload': {'token': 'x' * (1024 * 1024)}}, ['/api/auth/login']),
+    ({'status': 307}, ['/api/auth/login', '/api/servers']),
+    ({'status': 403}, ['/api/auth/login', '/api/servers']),
+    ({'payload': {}}, ['/api/auth/login', '/api/servers']),
+])
+def test_setup_api_failure_leaves_no_file_or_output(tmp_path, api, setup_entry, capsys, changes, paths):
+    url, state = api
+    state.update(changes)
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(tmp_path / 'token')]) != 0
+    output = capsys.readouterr()
+    assert output.out == '' and output.err and 'PRIVATE' not in output.err
+    assert list(tmp_path.iterdir()) == []
+    assert [req[1] for req in state['requests']] == paths
+
+
+@pytest.mark.parametrize('existing', ['file', 'dangling_symlink'])
+def test_setup_refuses_existing_target_before_login(tmp_path, api, setup_entry, capsys, existing):
+    url, state = api
+    target = tmp_path / 'token'
+    if existing == 'file':
+        target.write_text('old-token')
+    else:
+        target.symlink_to(tmp_path / 'missing')
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(target)]) != 0
+    assert capsys.readouterr().out == '' and not state['requests']
+    if existing == 'file':
+        assert target.read_text() == 'old-token'
+    else:
+        assert target.is_symlink() and not target.exists()
+
+
+def test_setup_never_falls_back_to_echoed_input(tmp_path, api, setup_entry, monkeypatch, capsys):
+    url, state = api
+    def fallback(prompt):
+        warnings.warn('PRIVATE fallback', getpass.GetPassWarning)
+        pytest.fail('getpass reached its echoed-input fallback')
+    monkeypatch.setattr(getpass, 'getpass', fallback)
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(tmp_path / 'token')]) != 0
+    output = capsys.readouterr()
+    assert output.out == '' and 'terminal' in output.err and 'PRIVATE' not in output.err
+    assert not state['requests'] and list(tmp_path.iterdir()) == []
+
+
+def test_setup_never_overwrites_file_created_during_login(tmp_path, api, setup_entry, monkeypatch, capsys):
+    url, state = api
+    target = tmp_path / 'token'
+    def concurrent_create(prompt):
+        target.touch(exist_ok=True)
+        target.write_text('other credential')
+        return 'PRIVATE'
+    monkeypatch.setattr(getpass, 'getpass', concurrent_create)
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(target)]) != 0
+    output = capsys.readouterr()
+    assert output.out == '' and 'PRIVATE' not in output.err
+    assert target.read_text() == 'other credential' and list(tmp_path.iterdir()) == [target]
+    assert [req[1] for req in state['requests']] == ['/api/auth/login', '/api/servers']
+
+
+@pytest.mark.parametrize('args', [
+    ['--setup'], ['--setup', '--check'], ['--setup', '--print-config'],
+    ['--setup', '--token-file', 'unused', '--url', 'http://example.org', '--allow-insecure'],
+])
+def test_setup_invalid_arguments_without_sdk(tmp_path, args):
+    result = run_entry(*args, cwd=tmp_path)
+    assert result.returncode != 0 and result.stdout == '' and result.stderr
+    assert 'PRIVATE' not in result.stderr and not list(tmp_path.iterdir())
+
+
+def test_setup_disk_failure_discards_unpublished_token(tmp_path, api, setup_entry, monkeypatch, capsys):
+    url, state = api
+    def disk_full(_fd):
+        raise OSError('PRIVATE disk error')
+    monkeypatch.setattr(os, 'fsync', disk_full)
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(tmp_path / 'token')]) != 0
+    output = capsys.readouterr()
+    assert output.out == '' and output.err and 'PRIVATE' not in output.err
+    assert [req[1] for req in state['requests']] == ['/api/auth/login', '/api/servers']
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_setup_rejects_shared_writable_directory_before_login(tmp_path, api, setup_entry, capsys):
+    url, state = api
+    directory = tmp_path / 'shared'
+    directory.mkdir()
+    directory.chmod(0o770)
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(directory / 'token')]) != 0
+    output = capsys.readouterr()
+    assert output.out == '' and 'directory' in output.err
+    assert not state['requests'] and list(directory.iterdir()) == []
+
+
+def test_setup_loopback_ignores_http_proxy(tmp_path, api, setup_entry, monkeypatch, capsys):
+    url, state = api
+    monkeypatch.setenv('http_proxy', 'http://127.0.0.1:1')
+    monkeypatch.setenv('no_proxy', 'unrelated.invalid')
+    assert setup_entry(['--setup', '--url', url, '--token-file', str(tmp_path / 'token')]) == 0
+    assert [req[1] for req in state['requests']] == ['/api/auth/login', '/api/servers']
+    assert 'PRIVATE' not in capsys.readouterr().out
+
+
+def test_check_for_setup_config_keeps_loopback_bearer_off_proxies(tmp_path, api, monkeypatch):
+    url, state = api
+    monkeypatch.setenv('http_proxy', 'http://127.0.0.1:1')
+    monkeypatch.setenv('no_proxy', 'unrelated.invalid')
+    target = tmp_path / 'token'
+    target.write_text('new-token')
+    result = run_entry('--check', '--url', url, '--token-file', str(target), cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert state['requests'] == [('GET', '/api/servers', 'Bearer new-token')]

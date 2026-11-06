@@ -16,62 +16,26 @@ MCP_PY="$PANEL_ROOT/.venv-mcp/bin/python"
 "$MCP_PY" "$PANEL_ROOT/scripts/panellab_mcp.py" --help
 ```
 
-SDK 固定为 `mcp==2.3.0`，留在独立环境，不必安装进后端环境。`--help`、`--print-config`、`--check` 本身只用 Python 标准库；只有 stdio 服务模式需要 SDK。Windows 可使用虚拟环境的 `Scripts/python.exe`，并为凭据文件配置仅当前用户可读的 ACL。
+SDK 固定为 `mcp==2.3.0`，安装在适配器自己的虚拟环境中。只有 stdio 服务模式需要 SDK，帮助、首次配置、检查和配置生成均使用 Python 标准库。
 
-## 2. 使用已有账号取得凭据文件
+## 2. 登录并取得客户端配置
 
-本机默认 API 是 `http://127.0.0.1:8000`。远程 API 应使用 HTTPS；非回环 HTTP 需要在适配器命令中显式加 `--allow-insecure`，它允许凭据明文传输，仅适用于用户明确接受的受控环境。URL 不接受用户名、密码、查询参数或片段。
-
-下面是调用现有 `/api/auth/login` 的一次性示例，不增加产品登录方式。它通过终端隐藏输入用户名和密码，只把返回的 token 写入你指定的新文件，不打印 token，也不把密码或 token 放进命令参数、环境变量或 shell 历史。请在有控制终端的本机终端运行；无法隐藏输入时直接失败。目录和文件权限示例适用于 macOS/Linux。
+在 macOS 或 Linux 的交互终端运行下面的命令。登录本机面板可直接使用示例地址，登录远程面板请改为实际的 HTTPS 地址。使用自己的账号和一个新的凭据文件名。
 
 ```sh
 PANEL_URL="http://127.0.0.1:8000"
 TOKEN_FILE="$HOME/.config/panellab/mcp.token"
-umask 077
-mkdir -p "$HOME/.config/panellab"
-chmod 700 "$HOME/.config/panellab"
-"$MCP_PY" - "$PANEL_ROOT" "$PANEL_URL" "$TOKEN_FILE" <<'PY'
-import getpass
-import json
-import os
-from pathlib import Path
-import sys
-import urllib.request
-import warnings
-
-sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
-from panellab import NoRedirect, base_url
-
-try:
-    warnings.simplefilter("error", getpass.GetPassWarning)
-    url = base_url(sys.argv[2], False)  # 远程登录必须 HTTPS
-    username = getpass.getpass("用户名（隐藏输入）: ")
-    password = getpass.getpass("密码: ")
-    request = urllib.request.Request(
-        url + "/api/auth/login", method="POST",
-        data=json.dumps({"username": username, "password": password}).encode(),
-        headers={"Content-Type": "application/json", "Accept": "application/json"})
-    with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
-        raw = response.read(1024 * 1024 + 1)
-    if len(raw) > 1024 * 1024:
-        raise ValueError()
-    token = json.loads(raw)["token"]
-    if (not isinstance(token, str) or not 1 <= len(token) <= 16384
-            or not token.isascii() or any(c.isspace() or ord(c) < 32 for c in token)):
-        raise ValueError()
-    fd = os.open(sys.argv[3], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        stream.write(token + "\n")
-except (Exception, KeyboardInterrupt):
-    print("登录或保存失败：请检查 API、账号、隐藏输入支持和目标新文件。", file=sys.stderr)
-    sys.exit(1)
-print("凭据已保存；未输出凭据内容。")
-PY
+"$MCP_PY" "$PANEL_ROOT/scripts/panellab_mcp.py" \
+  --setup --url "$PANEL_URL" --token-file "$TOKEN_FILE"
 ```
 
-文件已存在时示例拒绝覆盖。已有有效凭据也可以由你自行保存到受保护文件，不要提交进仓库、聊天、日志或示例配置。服务模式和 `--check` 也支持已有的 `PANEL_TOKEN` 环境变量；`--token-file` 优先，文件不可读时不会退回环境变量。生成配置必须显式提供文件路径。
+命令依次提示输入用户名、密码，两项均隐藏输入。它调用面板的 `POST /api/auth/login` 登录，再用返回的凭据调用 `GET /api/servers` 检查账号访问。服务器列表为空也可成功。验证通过后，命令在指定位置保存仅当前用户可读写的凭据文件，向标准输出打印一段通用 `mcpServers.panellab` JSON。JSON 只引用凭据路径。目标已存在时，请使用新文件名；凭据目录须由你拥有且仅你可写，缺少的目标目录会自动创建。请将凭据保存在自己的主目录下，避免放入代码仓库。
 
-## 3. 检查 API 并生成客户端配置
+将输出按客户端说明加入其 stdio MCP 配置，再重新连接。客户端可能使用不同的配置键或管理界面。保留 JSON 参数数组，可正确传递含空格和中文的绝对路径。客户端负责启动和停止适配器，适配器的 stdout 用于 MCP 协议。
+
+## 3. 已有凭据时，检查访问或重新生成配置
+
+如果已经有有效凭据，可直接使用现有文件。Windows 用户可用虚拟环境的 `Scripts/python.exe` 运行以下两种模式，并通过 ACL 将凭据文件的访问权限限制为当前用户。
 
 ```sh
 "$MCP_PY" "$PANEL_ROOT/scripts/panellab_mcp.py" \
@@ -81,13 +45,9 @@ PY
   --url "$PANEL_URL" --token-file "$TOKEN_FILE" --print-config
 ```
 
-检查成功只输出 `{"ok": true, "server_count": ...}`，数量为零也是有效结果；不会输出服务器详情。检查调用一次 `GET /api/servers`，验证当前 API 连通性和账号访问，不验证某个任务的 SSH、目录绑定或完整工具流程。失败向 stderr 输出脱敏诊断并非零退出；HTTP 失败保留数字状态码，401 提示重新登录、403 提示检查账号访问，404/409 提示检查 API 地址或配置。
+`--check` 单独验证账号对服务器列表的访问，成功时输出 `{"ok": true, "server_count": ...}`。任务 SSH 连接和目录绑定需要在具体任务上验证。`--print-config` 单独生成配置，可用于项目、虚拟环境或凭据路径发生变化之后。此模式只处理路径，不访问 API 或读取凭据。检查和 stdio 服务也可读取既有的 `PANEL_TOKEN` 环境变量；显式传入的文件优先，读取失败时直接报错。
 
-配置生成只输出通用 `mcpServers.panellab` JSON：`command` 是当前 Python 的绝对路径，`args` 包含入口、API URL、凭据文件的绝对路径，以及显式指定的 `--allow-insecure`。它不读取凭据文件、不联系 API、不输出环境变量或秘密，也不写任何客户端配置。文件可以尚不存在；生成成功不表示认证成功。
-
-将输出按客户端说明加入其 stdio MCP 配置，再重新连接。不同客户端可能使用不同的配置键、配置位置或管理界面，此处生成的是通用模板，不能保证任意客户端直接接受。绝对路径支持中文和空格，保留 JSON 参数数组，不要拼接为一条 shell 命令。生成配置后若移动项目、虚拟环境或凭据文件，需要重新生成并更新。`--print-config` 和 `--check` 不能同时使用。
-
-不传模式参数即启动 stdio 服务，由客户端负责进程生命周期；stdout 用于 MCP 协议。缺 SDK 时会向 stderr 提示安装 `scripts/requirements-mcp.txt`，使用上面虚拟环境的完整安装命令即可。
+首次登录仅接受 HTTPS 或回环 HTTP，禁止重定向。对于持有现成凭据、明确接受受控网络中明文传输的用户，其他模式允许显式指定 `--allow-insecure`。所有模式的 API URL 均不可包含用户名、密码、查询参数或片段。
 
 ## 4. 让客户端发现并读取任务
 
@@ -115,7 +75,7 @@ PY
 
 ## 凭据到期与排障
 
-JWT 到期由服务端 `jwt_expire_minutes` 设置决定，当前默认七天，部署可覆盖。到期或服务端密钥变更后，用原有登录方式重新取得凭据。上述示例可改 `TOKEN_FILE` 为新的受保护文件名，重新运行、检查并生成配置，然后在客户端更新配置并重启 MCP 连接。运行中的适配器在启动时读取凭据，单独更换文件不会刷新已启动进程。不要假定浏览器退出登录就会撤销已发出的凭据。
+JWT 到期由服务端 `jwt_expire_minutes` 设置决定，当前默认七天，部署可覆盖。若遇到 401 或服务端密钥变更，将第 2 步的 `TOKEN_FILE` 改为新文件名（如 `mcp-2.token`），再次运行 `--setup`。用新输出更新客户端配置并重启 MCP 连接，使新进程读取新凭据。旧文件由你自行保管或清理。重新登录和删除本地文件都不能撤销仍在有效期内的旧凭据。
 
 检查失败时先核对 API URL、网络、凭据文件是否可读及登录是否仍有效。工具错误会给出固定恢复提示：401 重新登录并更新凭据；403 检查账号及目录访问；404 刷新任务列表并确认资源归属；409 在面板检查主机信任与任务绑定。无日志绑定需先在面板配置日志路径。服务端返回体、token 和原始异常不会作为诊断输出。
 
