@@ -135,3 +135,25 @@ def test_no_unpinned_host_key_policy_remains():
     offenders = [str(p) for p in source.rglob('*.py')
                  if 'tests' not in p.parts and '.venv' not in str(p) and 'AutoAddPolicy' in p.read_text(errors='ignore')]
     assert offenders == []
+
+
+def test_out_of_order_sample_is_ignored_not_reset(api, remote):
+    _, queue = remote
+    queue += [snapshot(clock=100, busy=100, idle=900, rx=0), snapshot(clock=105, busy=200, idle=1800, rx=5120),
+              snapshot(clock=110, busy=300, idle=2700, rx=10240), snapshot(clock=104, busy=150, idle=1500, rx=4096),
+              snapshot(clock=115, busy=400, idle=3600, rx=15360)]
+    for _ in range(3): api.get('/api/monitor/stats', params={'target': 'server:71'})
+    stale = api.get('/api/monitor/stats', params={'target': 'server:71'}).json()
+    assert stale['network']['rate_recv_kbps'] is None and len(stale['network']['network_history']) == 2
+    after = api.get('/api/monitor/stats', params={'target': 'server:71'}).json()
+    assert after['network']['rate_recv_kbps'] == 1.0 and len(after['network']['network_history']) == 3
+
+
+def test_unicode_digit_target_and_odd_interface_names_do_not_500(api, remote):
+    _, queue = remote
+    assert api.get('/api/monitor/stats', params={'target': 'server:²'}).json()['detail']['code'] == 'invalid_target'
+    odd = snapshot(clock=100, rx=1)
+    odd['system']['network'] += [{'name': 7, 'received_bytes': 1, 'sent_bytes': 1, 'ifindex': None},
+                                 {'name': 'eth0', 'received_bytes': 1, 'sent_bytes': 1, 'ifindex': None}]
+    queue.append(odd)
+    assert api.get('/api/monitor/stats', params={'target': 'server:71'}).status_code == 200

@@ -234,7 +234,7 @@ def get_stats(
     if target == "remote":
         fail("legacy_remote_removed", "旧版远程监控连接已停用，请在任务工作区添加服务器并确认主机指纹", 410)
     prefix, _, value = target.partition(":")
-    if prefix != "server" or not value.isdigit() or not 0 < int(value) <= 2**62:
+    if prefix != "server" or not (value.isascii() and value.isdigit()) or not 0 < int(value) <= 2**62:
         fail("invalid_target", "Unknown monitor target", 422)
     from services import remote_monitor
     return remote_monitor.stats(db, current_user, int(value))

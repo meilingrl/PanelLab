@@ -49,10 +49,11 @@ def _disk(disks):
 def _network_totals(network):
     if not isinstance(network, list):
         return None
-    usable = [n for n in network if n.get('name') != 'lo' and _number(n.get('received_bytes')) and _number(n.get('sent_bytes'))]
+    usable = [n for n in network if isinstance(n, dict) and isinstance(n.get('name'), str) and n['name'] != 'lo'
+              and _number(n.get('received_bytes')) and _number(n.get('sent_bytes'))]
     if not usable:
         return None
-    interfaces = tuple(sorted((n.get('name'), n.get('ifindex')) for n in usable))
+    interfaces = tuple(sorted((n['name'], str(n.get('ifindex'))) for n in usable))
     return interfaces, sum(n['received_bytes'] for n in usable), sum(n['sent_bytes'] for n in usable)
 
 
@@ -70,29 +71,32 @@ def stats(db, user, server_id):
     cpu_percent = rate_recv = rate_sent = None
     with _lock:
         previous = _samples.get(key)
-        history = previous['history'] if previous else deque(maxlen=HISTORY)
-        comparable = (previous and boot and clock is not None and previous['boot'] == boot
-                      and 0 < clock - previous['clock'] <= MAX_SAMPLE_GAP)
-        if not comparable:
-            history = deque(maxlen=HISTORY)
-        if comparable and ticks and previous['ticks']:
-            deltas = [ticks[k] - previous['ticks'][k] for k in CPU_FIELDS]
-            total = sum(deltas)
-            if total > 0 and min(deltas) >= 0:
-                idle = deltas[CPU_FIELDS.index('idle')] + deltas[CPU_FIELDS.index('iowait')]
-                cpu_percent = round((total - idle) * 100 / total, 1)
-        if comparable and totals and previous['network'] and previous['network'][0] == totals[0]:
-            interval = clock - previous['clock']
-            received, sent = totals[1] - previous['network'][1], totals[2] - previous['network'][2]
-            if received >= 0 and sent >= 0:
-                rate_recv, rate_sent = round(received / 1024 / interval, 2), round(sent / 1024 / interval, 2)
-                # The remote clock is monotonic, not wall time; label points by the observation time.
-                history.append({'observed_at': snap['observed_at'], 'rate_recv_kbps': rate_recv, 'rate_sent_kbps': rate_sent})
-        if boot and clock is not None:
-            _samples[key] = {'boot': boot, 'clock': clock, 'ticks': ticks, 'network': totals, 'history': history}
+        same_boot = bool(previous and boot and clock is not None and previous['boot'] == boot)
+        if same_boot and clock <= previous['clock']:
+            # Concurrent polls (two tabs) can finish out of order: report the older sample as-is,
+            # but keep the newer baseline and history.
+            history_list = list(previous['history'])
         else:
-            _samples.pop(key, None)
-        history_list = list(history)
+            comparable = same_boot and clock - previous['clock'] <= MAX_SAMPLE_GAP
+            history = previous['history'] if comparable else deque(maxlen=HISTORY)
+            if comparable and ticks and previous['ticks']:
+                deltas = [ticks[k] - previous['ticks'][k] for k in CPU_FIELDS]
+                total = sum(deltas)
+                if total > 0 and min(deltas) >= 0:
+                    idle = deltas[CPU_FIELDS.index('idle')] + deltas[CPU_FIELDS.index('iowait')]
+                    cpu_percent = round((total - idle) * 100 / total, 1)
+            if comparable and totals and previous['network'] and previous['network'][0] == totals[0]:
+                interval = clock - previous['clock']
+                received, sent = totals[1] - previous['network'][1], totals[2] - previous['network'][2]
+                if received >= 0 and sent >= 0:
+                    rate_recv, rate_sent = round(received / 1024 / interval, 2), round(sent / 1024 / interval, 2)
+                    # The remote clock is monotonic, not wall time; label points by the observation time.
+                    history.append({'observed_at': snap['observed_at'], 'rate_recv_kbps': rate_recv, 'rate_sent_kbps': rate_sent})
+            if boot and clock is not None:
+                _samples[key] = {'boot': boot, 'clock': clock, 'ticks': ticks, 'network': totals, 'history': history}
+            else:
+                _samples.pop(key, None)
+            history_list = list(history)
     network = None
     if totals:
         network = {'bytes_recv': totals[1], 'bytes_sent': totals[2], 'rate_recv_kbps': rate_recv,

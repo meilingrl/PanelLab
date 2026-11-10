@@ -27,6 +27,8 @@ const processNameFilter = ref('')
 
 const trafficChartRef = ref(null)
 let trafficChart = null
+// The canvas disappears whenever stats or history are empty; a chart must follow the live element.
+let trafficChartCanvas = null
 const GAUGE_R = 40
 const GAUGE_C = 2 * Math.PI * GAUGE_R
 function gaugeOffset(percent) {
@@ -117,6 +119,7 @@ function destroyTrafficChart() {
     trafficChart.destroy()
     trafficChart = null
   }
+  trafficChartCanvas = null
 }
 
 watch(currentTarget, () => {
@@ -207,10 +210,12 @@ function updateTrafficChart() {
   const net = stats.value?.network
   const history = net?.network_history || []
   if (!trafficChartRef.value || !Array.isArray(history) || history.length === 0) return
+  if (trafficChart && trafficChartCanvas !== trafficChartRef.value) destroyTrafficChart()
   const labels = history.map(pointLabel)
   const sentData = history.map((p) => p.rate_sent_kbps ?? 0)
   const recvData = history.map((p) => p.rate_recv_kbps ?? 0)
   if (!trafficChart) {
+    trafficChartCanvas = trafficChartRef.value
     const ctx = trafficChartRef.value.getContext('2d')
     const border = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#ddd'
     const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4a9'
@@ -304,9 +309,9 @@ onUnmounted(() => {
             <div class="gauge-wrap gauge-wrap-sm">
               <svg class="gauge-svg gauge-svg-sm" viewBox="0 0 100 100">
                 <circle class="gauge-bg" cx="50" cy="50" r="36" fill="none" stroke-width="8" />
-                <circle class="gauge-fill" cx="50" cy="50" r="36" fill="none" stroke-width="8" stroke-dasharray="226" :stroke-dashoffset="226 * (1 - Math.min(100, d.percent) / 100)" transform="rotate(-90 50 50)" />
+                <circle class="gauge-fill" cx="50" cy="50" r="36" fill="none" stroke-width="8" stroke-dasharray="226" :stroke-dashoffset="226 * (1 - Math.min(100, d.percent ?? 0) / 100)" transform="rotate(-90 50 50)" />
               </svg>
-              <span class="gauge-value gauge-value-sm">{{ d.percent }}%</span>
+              <span class="gauge-value gauge-value-sm">{{ d.percent == null ? '—' : d.percent + '%' }}</span>
             </div>
             <p class="gauge-detail">已用 {{ formatGB(d.used_gb) }} / 共 {{ formatGB(d.total_gb) }}</p>
           </div>

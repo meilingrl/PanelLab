@@ -1,6 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-vi.mock('chart.js', () => ({ Chart: class { static register() {} constructor() {} update() {} destroy() {} }, registerables: [] }))
+const charts = vi.hoisted(() => [])
+vi.mock('chart.js', () => ({ Chart: class { static register() {} constructor() { this.destroyed = false; this.data = { labels: [], datasets: [{}, {}] }; charts.push(this) } update() {} destroy() { this.destroyed = true } }, registerables: [] }))
 import Monitor from '../src/views/dashboard/Monitor.vue'
 
 const RouterLink = { template: '<a><slot /></a>' }
@@ -76,4 +77,32 @@ it('reports the legacy unpinned config and deletes it on request', async () => {
   await w.get('[data-testid="legacy-remote"] button').trigger('click'); await flushPromises()
   expect(fetch.mock.calls.some(([u, o]) => u === '/api/monitor/remote-config' && o?.method === 'DELETE')).toBe(true)
   expect(w.find('[data-testid="legacy-remote"]').exists()).toBe(false)
+})
+
+it('rebuilds the traffic chart after a failed poll replaces its canvas, and tolerates unknown disk percent', async () => {
+  vi.useFakeTimers()
+  try {
+    charts.length = 0
+    const history = [{ observed_at: '2026-11-10T00:00:05Z', rate_recv_kbps: 1, rate_sent_kbps: 1 }]
+    let fail = false
+    fetch.mockImplementation(async (url, o = {}) => {
+      if (url === '/api/monitor/stats?target=server%3A71') return fail
+        ? response({ detail: { code: 'connection_failed', message: 'SSH connection or authentication failed' } }, false)
+        : response({ ...remote, disk: [{ mountpoint: '/empty', total_gb: 0.1, used_gb: 0, free_gb: 0, percent: null }],
+          network: { ...remote.network, network_history: history } })
+      if (url === '/api/monitor/remote-config') return response({ legacy_configured: false })
+      if (url === '/api/monitor/hosts') return response({ hosts: [{ id: 'local', label: '本机', pinned: true }, { id: 'server:71', label: 'trainer', pinned: true }] })
+      if (url.startsWith('/api/monitor/processes')) return response({ processes: [] })
+      return response(local)
+    })
+    const w = await mountMonitor()
+    await w.get('#monitor-target').setValue('server:71'); await flushPromises()
+    expect(charts).toHaveLength(1)
+    expect(w.findAll('.gauge-value-sm').at(-1).text()).toBe('—')
+    fail = true; await vi.advanceTimersByTimeAsync(5000); await flushPromises()
+    expect(w.text()).toContain('SSH connection or authentication failed')
+    fail = false; await vi.advanceTimersByTimeAsync(5000); await flushPromises()
+    expect(charts).toHaveLength(2)
+    expect(charts[0].destroyed).toBe(true)
+  } finally { vi.useRealTimers() }
 })
