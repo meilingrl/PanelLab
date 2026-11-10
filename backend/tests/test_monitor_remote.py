@@ -196,3 +196,16 @@ def test_local_target_is_labelled_as_the_panel_container(api, monkeypatch):
     local = api.get('/api/monitor/hosts').json()['hosts'][0]
     assert local['id'] == 'local' and local['label'] == '面板容器'
     assert 'Docker' in local['note']
+
+
+def test_local_disk_does_not_repeat_the_root_device(monkeypatch, tmp_path):
+    from collections import namedtuple
+    from routers import monitor
+    Part = namedtuple('Part', 'device mountpoint')
+    Usage = namedtuple('Usage', 'total used free percent')
+    home = tmp_path / 'home'; home.mkdir()
+    other = tmp_path / 'data'; other.mkdir()
+    parts = [Part('/dev/sda2', '/'), Part('/dev/sda2', str(home)), Part('/dev/sdb1', str(other))]
+    monkeypatch.setattr(monitor.psutil, 'disk_partitions', lambda all=False: parts)
+    monkeypatch.setattr(monitor.psutil, 'disk_usage', lambda p: Usage(10 * 1024 ** 3, 5 * 1024 ** 3, 5 * 1024 ** 3, 50.0))
+    assert [d['mountpoint'] for d in monitor._get_disk()] == ['/', str(other)]

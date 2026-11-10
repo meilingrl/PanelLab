@@ -81,7 +81,10 @@ def _get_disk() -> List[Dict[str, Any]]:
     seen_devices = set()
     root = "C:\\" if os.name == "nt" else "/"
     try:
-        for part in psutil.disk_partitions(all=False):
+        parts = list(psutil.disk_partitions(all=False))
+        # Root is always reported below; other mounts of its disk would show it twice.
+        seen_devices.update(p.device for p in parts if p.mountpoint == root)
+        for part in parts:
             if part.mountpoint == root or part.device in seen_devices or not os.path.isdir(part.mountpoint):
                 continue
             try:
