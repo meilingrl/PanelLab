@@ -5,12 +5,14 @@ import { request } from '../../composables/useWorkspaceApi'
 import '../../components/workspaces/workspaces.css'
 import JobList from '../../components/agent/JobList.vue'
 import JobDetail from '../../components/agent/JobDetail.vue'
+import JobForm from '../../components/agent/JobForm.vue'
+import AlertSettings from '../../components/agent/AlertSettings.vue'
+import AgentInstall from '../../components/agent/AgentInstall.vue'
 
 const hosts = ref([]), serverKey = ref(''), loading = ref(false), hostsError = ref('')
 const agentStatus = ref(null), jobs = ref([]), error = ref(null), notice = ref('')
 const lastRuns = ref({}), previews = ref({}), selectedId = ref(null)
-// Hooks for Task 11: `editing` is null, 'new' or a job object; `settings` toggles alert settings.
-// Task 11 renders JobForm / AlertSettings in the form slot below and replaces the not-installed notice with AgentInstall.
+// `editing` is null, 'new' or a job object (JobForm); `settings` toggles AlertSettings.
 const editing = ref(null), settings = ref(false)
 const serverId = computed(() => Number(serverKey.value.split(':')[1]))
 const selectedJob = computed(() => jobs.value.find(j => j.id === selectedId.value))
@@ -72,6 +74,13 @@ async function refresh() {
   try { await fetchAll(seq, signal, serverId.value); if (seq === generation) notice.value = '' }
   catch (e) { if (seq === generation && e.name !== 'AbortError') notice.value = errorText(e) }
 }
+const hostLabel = computed(() => hosts.value.find(h => h.id === serverKey.value)?.label || '')
+async function formSaved(saved) {
+  const wasNew = editing.value === 'new'
+  editing.value = null; settings.value = false
+  await refresh()
+  if (wasNew && saved?.id && jobs.value.some(j => j.id === saved.id)) selectedId.value = saved.id
+}
 function deleted() { selectedId.value = null; refresh() }
 onMounted(async () => {
   try {
@@ -94,10 +103,11 @@ onBeforeUnmount(() => { generation++; controller?.abort() })
     <p v-else-if="!hosts.some(h => h.pinned !== false)" class="ws-notice">还没有已确认指纹的服务器。请先在 <router-link to="/workspaces">任务工作区</router-link> 添加服务器并确认指纹。</p>
 
     <section v-if="error?.code === 'agent_not_installed'" class="ws-panel ws-empty" data-testid="agent-not-installed">
-      <h2>这台服务器的 Agent 未安装</h2><p>Agent 是运行在服务器上的小程序，负责按计划执行作业。安装入口将在本页提供。</p></section>
+      <h2>这台服务器的 Agent 未安装</h2><AgentInstall :key="serverId" :server-id="serverId" :host="hostLabel" @recheck="load" /></section>
     <section v-else-if="error" class="ws-error" role="alert" data-testid="agent-error">{{ errorText(error) }}
       <template v-if="error.code === 'trust_required'"> <router-link to="/workspaces">前往任务工作区</router-link></template>
-      <p v-if="error.message && error.code !== 'agent_permission' && ERROR_TEXT[error.code]" class="ws-muted">详情：{{ error.message }}</p></section>
+      <p v-if="error.message && error.code !== 'agent_permission' && ERROR_TEXT[error.code]" class="ws-muted">详情：{{ error.message }}</p>
+      <AgentInstall v-if="error.code === 'protocol_mismatch'" :key="serverId" :server-id="serverId" :host="hostLabel" @recheck="load" /></section>
     <template v-else-if="agentStatus">
       <p v-if="notice" class="ws-error" role="alert">{{ notice }}</p>
       <div class="ws-row ws-wrap agent-statusbar" data-testid="agent-status"><span class="ws-badge good">Agent 运行中</span>
@@ -105,7 +115,9 @@ onBeforeUnmount(() => { generation++; controller?.abort() })
         <span class="ws-muted">正在运行 {{ (agentStatus.running || []).length }}</span><span v-if="agentStatus.draining" class="ws-badge warn">正在排空</span></div>
       <section v-if="(agentStatus.firing || []).length" class="ws-error" data-testid="firing-alerts" role="alert"><strong>触发中的告警</strong>
         <ul><li v-for="a in agentStatus.firing" :key="a.key">{{ a.message }}</li></ul></section>
-      <div v-if="editing || settings" data-testid="agent-form-slot" class="ws-panel"><p class="ws-muted">表单将在后续版本提供。</p><button @click="editing = null; settings = false">关闭</button></div>
+      <div v-if="editing || settings" data-testid="agent-form-slot">
+        <JobForm v-if="editing" :key="serverId + ':' + (editing === 'new' ? 'new' : editing.id)" :server-id="serverId" :job="editing === 'new' ? null : editing" :default-tz="agentStatus.timezone || 'UTC'" @saved="formSaved" @cancel="editing = null" />
+        <AlertSettings v-else :key="serverId" :server-id="serverId" @saved="formSaved" @cancel="settings = false" /></div>
       <JobList :jobs="jobs" :next-runs="nextRuns" :last-runs="lastRuns" :selected-id="selectedId" @select="selectedId = $event" />
       <JobDetail v-if="selectedJob" :key="serverId + ':' + selectedJob.id" :server-id="serverId" :job="selectedJob" :running-runs="(agentStatus.running || []).filter(r => r.job_id === selectedJob.id)" @changed="refresh" @deleted="deleted" @edit="editing = $event; settings = false" />
     </template>
