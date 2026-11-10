@@ -1,5 +1,7 @@
 # PanelLab 文档索引
 
+接手项目请先读[2026-11-10 交接说明](project/handoff-20261110.md)，其中汇总用户目标、累积改动、当前边界和工作规范。
+
 本轮入口：[本地启动](deploy/deploy.md) · [任务与日志](user/remote-workspace.md) · [外部 Agent 接入](user/mcp-access.md) · [实现与验证](project/onboarding-log-follow-20261106.md)。
 
 MCP 工具首版：[MCP接入设计](design/design-mcp-task-access.md) · [实施计划](design/plan-mcp-task-access.md) · [本轮记录](project/mcp-access-20261105.md) · [接入指南](user/mcp-access.md)。
