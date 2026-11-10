@@ -14,6 +14,19 @@ python scripts/verify_workspace_lab.py
 
 脚本只创建自己的Linux SSH/SFTP与MySQL实例，使用本机随机端口，退出时回收自己的容器和API进程。它验证任务、CLI、文件、PTY与公钥变化拒绝；测试日志是夹具，不是模型训练结果。`--serve` 可在检查通过后保留隔离API供手工验收，Ctrl-C会回收本次环境；原有服务不被接管。完整证据见[本轮记录](../project/remote-workspace-20261103.md)。
 
+## 服务器 Agent 隔离验收
+
+需要 Docker（Colima 上可运行带 systemd 的特权容器）。在仓库根目录：
+
+```bash
+cd agent && python3 -m pytest -q && cd ..
+python3 scripts/verify_agent_lab.py
+docker pull mysql:8.4.9
+.venv311/bin/python scripts/verify_agent_lab.py --panel
+```
+
+第一条是 Agent 单元测试。第二条构建 `panellab-agent-lab:20261110` 夹具（Debian，systemd 为 PID 1，内含 sshd 和本地 SMTP 接收器），用 `install.sh` 真实安装，检查单元加固、权限、告警邮件、崩溃重启、排空升级和卸载，结尾输出 `agent lab: all checks passed`。`--panel` 需要后端依赖：它启动一个只监听本机随机端口的隔离后端（自带临时 MySQL 容器 `panellab-agent-lab-mysql`），经固定指纹 SSH 以夹具的 `admin` 走完上传安装包、运行安装命令、作业、失败与恢复邮件、暂停恢复、阈值和测试邮件，结尾输出 `agent panel lab: all checks passed`。脚本只创建和删除名为 `panellab-agent-lab*` 的容器，不使用已有面板、数据库或真实服务器。`--keep` 保留夹具容器供排查。证据见[本轮记录](../project/server-agent-20261111.md)。
+
 ## 站点变更自动检查
 
 ```bash
