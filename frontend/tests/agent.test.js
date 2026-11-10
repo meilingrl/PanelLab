@@ -236,3 +236,20 @@ it('B3: next run time is shown as a plain local time with the job time zone in t
   const cell = w.findAll('[data-testid="job-row"] td')[2]
   expect(cell.text()).toBe('2026-11-11 03:00'); expect(cell.attributes('title')).toContain('Asia/Shanghai')
 })
+
+it('B1: an in-flight poll refresh settling after unmount does not re-arm the poll', async () => {
+  vi.useFakeTimers()
+  let release, hold = false
+  routes['GET /api/servers/71/agent'] = async () => {
+    if (hold) await new Promise(r => { release = r })
+    return response(status({ running: [{ run_id: 4, job_id: 'backup', started_at: '2026-11-11T03:00:00Z' }] }))
+  }
+  const w = await mountAgent(); await flushPromises()
+  hold = true
+  await vi.advanceTimersByTimeAsync(5100)            // tick starts, its status request is pending
+  const before = count('GET /api/servers/71/agent')
+  w.unmount(); wrappers = wrappers.filter(x => x !== w)
+  release(); await flushPromises()
+  await vi.advanceTimersByTimeAsync(30000); await flushPromises()
+  expect(count('GET /api/servers/71/agent')).toBe(before)
+})

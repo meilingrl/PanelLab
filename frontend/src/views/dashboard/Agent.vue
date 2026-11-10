@@ -96,18 +96,19 @@ onMounted(async () => {
 })
 // While the status lists running runs, re-poll it every 5 s (never overlapping, skipped while the page is hidden)
 // so the badge, last result and cancel button settle even for runs this page did not start.
-let pollTimer = null, polling = false
+let pollTimer = null, polling = false, unmounted = false
 function schedulePoll() {
   clearTimeout(pollTimer); pollTimer = null
-  if (!agentStatus.value?.running?.length) return
+  if (unmounted || !agentStatus.value?.running?.length) return
   pollTimer = setTimeout(async () => {
     pollTimer = null
+    if (unmounted) return
     if (!document.hidden && !polling && controller) { polling = true; try { await refresh() } finally { polling = false } }
     schedulePoll()
   }, 5000)
 }
 watch(() => agentStatus.value?.running?.length || 0, schedulePoll)
-onBeforeUnmount(() => { generation++; controller?.abort(); clearTimeout(pollTimer) })
+onBeforeUnmount(() => { unmounted = true; generation++; controller?.abort(); clearTimeout(pollTimer) })
 </script>
 <template>
   <div class="workspaces agent-page">
