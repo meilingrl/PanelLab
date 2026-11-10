@@ -96,3 +96,15 @@ it('switching servers during an in-flight save leaves the new server editable',a
  expect(w.get('[data-testid="key-text"]').element.value).toBe('typed for 72')
  expect(w.find('[data-testid="key-summary"]').exists()).toBe(false)
 })
+
+it('defaults an unpinned server with a saved key to key login after a reload',async()=>{
+ stored={configured:true,key_type:'ssh-ed25519',fingerprint:'SHA256:client'}
+ const w=mountIt(ConnectionPanel,{server});await flushPromises()
+ expect(w.get('select').element.value).toBe('key')
+ expect(w.get('[data-testid="key-summary"]').text()).toContain('SHA256:client')
+})
+
+it('keeps password login for an unpinned server without a saved key',async()=>{
+ const w=mountIt(ConnectionPanel,{server});await flushPromises()
+ expect(w.get('select').element.value).toBe('password')
+})

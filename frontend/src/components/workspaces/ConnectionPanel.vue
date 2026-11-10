@@ -15,7 +15,15 @@ watch(()=>serverBinding(props.server),async ()=>{
   const id=props.server.id
   const seq=++generation;controller?.abort();controller=new AbortController()
   info.value=null;probe.value=null;checked.value=null;error.value='';busy.value=false;authMode.value=props.initialAuthMode||'password'
-  try {const result=await api.connection(id,controller.signal);if(seq===generation){info.value=result;authMode.value=result.auth_mode||props.initialAuthMode||'password'}}
+  try {
+    const result=await api.connection(id,controller.signal);if(seq!==generation)return
+    info.value=result;authMode.value=result.auth_mode||props.initialAuthMode||'password'
+    // Nothing pinned yet: a server whose key is already saved was set up for key login.
+    if(!result.auth_mode&&!props.initialAuthMode){
+      const key=await api.privateKey(id).catch(()=>null)
+      if(seq===generation&&key?.configured&&authMode.value==='password'&&!busy.value&&!probe.value)authMode.value='key'
+    }
+  }
   catch(e){if(seq===generation&&e.name!=='AbortError')error.value=e.message}
 },{immediate:true})
 onBeforeUnmount(()=>{generation++;controller?.abort()})
