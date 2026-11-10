@@ -182,6 +182,10 @@ class Store:
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(_SCHEMA)
+            # Tombstones from before ids were freed on delete keep the bare id.
+            for row in self._db.execute(
+                    "SELECT id FROM jobs WHERE deleted = 1 AND instr(id, '~') = 0").fetchall():
+                self._rename_tombstone(row["id"])
 
     def close(self) -> None:
         with self._lock:
@@ -252,12 +256,37 @@ class Store:
                  self._blob(merged), job_id))
             return self._job_dict(self._fetch_job(job_id))
 
+    def _rename_tombstone(self, job_id: str) -> str:
+        """Mark a job deleted and rename it to <id>~<rowid>, freeing the id.
+
+        Its runs follow it to the new name in the same transaction, so they
+        stay readable by run id. Caller holds the lock. `~` never matches
+        ID_RE, so a tombstone name cannot collide with a live job.
+        """
+        row = self._db.execute("SELECT rowid AS r FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        tomb = "%s~%d" % (job_id, row["r"])
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            self._db.execute("UPDATE jobs SET id = ?, deleted = 1, updated_at = ? WHERE id = ?",
+                             (tomb, self._now(), job_id))
+            self._db.execute("UPDATE runs SET job_id = ? WHERE job_id = ?", (tomb, job_id))
+            self._db.execute("COMMIT")
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        return tomb
+
     def delete_job(self, job_id: str) -> None:
         with self._lock:
             if self._fetch_job(job_id) is None:
                 raise StoreError("not_found", "no such job: %s" % job_id)
-            self._db.execute("UPDATE jobs SET deleted = 1, updated_at = ? WHERE id = ?",
-                             (self._now(), job_id))
+            self._rename_tombstone(job_id)
+
+    def deleted_job_ids(self) -> List[str]:
+        """Tombstone ids (<id>~<rowid>) of deleted jobs, for pruning their runs."""
+        with self._lock:
+            rows = self._db.execute("SELECT id FROM jobs WHERE deleted = 1 ORDER BY id").fetchall()
+            return [r["id"] for r in rows]
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:

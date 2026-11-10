@@ -587,3 +587,35 @@ def test_startup_seeds_resource_watches_from_firing_alerts(rig):
         a.tick()
     assert a.store.get_alert("mem")["state"] == "ok"
     assert a.store.get_alert("cpu")["state"] == "firing"  # no CPU samples yet
+
+
+# ------------------------------------------------------- R24: deleted job ids
+
+def test_delete_recreate_and_prune_deleted_runs(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path)))
+    rid = ok(call(a, "jobs.run_now", id="j"))["run_id"]
+    wait_run(a, rid)
+    ok(call(a, "jobs.delete", id="j"))
+    ok(call(a, "jobs.create", job=job_def(tmp_path, name="J2")))
+    assert ok(call(a, "runs.list", job_id="j"))["runs"] == []
+    assert "hello" in ok(call(a, "runs.output", run_id=rid))["data"]
+    log = os.path.join(a.output_dir, "%d.log" % rid)
+    assert os.path.exists(log)
+    (tomb,) = a.store.deleted_job_ids()
+    a.store.prune = lambda job_id: [rid] if job_id == tomb else []
+    a._prune()
+    assert not os.path.exists(log)
+
+
+def test_run_of_deleted_job_does_not_alert_for_recreated_job(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/sh", "-c", "sleep 0.3; exit 1"])))
+    rid = ok(call(a, "jobs.run_now", id="j"))["run_id"]
+    ok(call(a, "jobs.delete", id="j"))
+    rig.clock.advance(1)
+    ok(call(a, "jobs.create", job=job_def(tmp_path)))
+    assert wait_run(a, rid)["status"] == "failed"
+    rig.wait_mail(a)
+    assert not any("作业失败" in s for s in rig.mailer.subjects())
+    assert (a.store.get_alert("job:j") or {}).get("state") != "firing"

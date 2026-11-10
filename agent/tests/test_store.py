@@ -114,13 +114,10 @@ def test_delete_keeps_history_but_hides_job(store):
     store.delete_job("backup")
     assert store.list_jobs() == []
     assert store.get_job("backup") is None
-    assert store.get_run(rid)["job_id"] == "backup"
+    assert store.get_run(rid)["job_id"].startswith("backup~")  # kept on the tombstone
     with pytest.raises(StoreError) as e:
         store.delete_job("backup")
     assert e.value.code == "not_found"
-    with pytest.raises(StoreError) as e:
-        store.create_job(make_job())
-    assert e.value.code == "conflict"
     with pytest.raises(StoreError) as e:
         store.delete_job("never")
     assert e.value.code == "not_found"
@@ -304,3 +301,50 @@ def test_record_skipped_mirrors_missed(store):
     run = store.get_run(rid)
     assert run["status"] == "skipped_overlap" and run["trigger"] == "schedule"
     assert run["scheduled_for"] == t1.isoformat() and run["finished_at"] is not None
+
+
+# ---- R24: deleted ids are free again
+
+def test_delete_then_recreate_same_id(store):
+    store.create_job(make_job())
+    rid = store.insert_run("backup", "manual", None, 1)
+    store.finish_run(rid, "succeeded", 0, 5, False)
+    store.delete_job("backup")
+    again = store.create_job(make_job(name="Backup 2"))
+    assert again["id"] == "backup" and again["revision"] == 1 and again["name"] == "Backup 2"
+    assert store.list_runs("backup") == []
+    old = store.get_run(rid)
+    assert old["status"] == "succeeded" and old["job_id"] != "backup"
+    assert [j["id"] for j in store.list_jobs()] == ["backup"]
+    store.delete_job("backup")  # a second tombstone with the same original id
+    assert len(store.deleted_job_ids()) == 2
+    store.create_job(make_job())
+
+
+def test_prune_covers_deleted_jobs(store, clock):
+    store.create_job(make_job(id="old"))
+    base = clock.now()
+    clock._now = base - timedelta(days=100)
+    olds = []
+    for _ in range(205):
+        rid = store.insert_run("old", "schedule", None, 1)
+        store.finish_run(rid, "succeeded", 0, 0, False)
+        olds.append(rid)
+    clock._now = base
+    store.delete_job("old")
+    (tomb,) = store.deleted_job_ids()
+    assert sorted(store.prune(tomb)) == olds[:5]
+
+
+def test_legacy_tombstone_is_renamed_on_open(tmp_path, clock):
+    path = str(tmp_path / "legacy.db")
+    s = Store(path, clock)
+    s.create_job(make_job())
+    rid = s.insert_run("backup", "manual", None, 1)
+    s._db.execute("UPDATE jobs SET deleted = 1 WHERE id = 'backup'")  # pre-R24 delete
+    s.close()
+    s = Store(path, clock)
+    s.create_job(make_job())
+    assert s.get_run(rid)["job_id"].startswith("backup~")
+    assert s.list_runs("backup") == []
+    s.close()

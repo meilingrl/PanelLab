@@ -453,8 +453,11 @@ class Agent:
         return "\n".join(parts)
 
     def on_finish(self, job: Dict[str, Any], run: Optional[Dict[str, Any]]) -> None:
-        if not run or self.store.get_job(job["id"]) is None:
+        current = self.store.get_job(job["id"]) if run else None
+        if current is None:
             return  # deleted jobs raise no alerts
+        if job.get("created_at") and current.get("created_at") != job["created_at"]:
+            return  # a run of a deleted job whose id was reused
         status = run.get("status")
         key = "job:" + job["id"]
         name = job.get("name") or job["id"]
@@ -723,12 +726,13 @@ class Agent:
 
     def _prune(self) -> None:
         mono = self.clock.monotonic()
-        for job in self.store.list_jobs():
-            last = self._pruned_at.get(job["id"])
+        ids = [j["id"] for j in self.store.list_jobs()] + self.store.deleted_job_ids()
+        for job_id in ids:
+            last = self._pruned_at.get(job_id)
             if last is not None and mono - last < PRUNE_INTERVAL_S:
                 continue
-            self._pruned_at[job["id"]] = mono
-            removed = self.store.prune(job["id"])
+            self._pruned_at[job_id] = mono
+            removed = self.store.prune(job_id)
             if removed:
                 self.runner.delete_output(removed)
 
