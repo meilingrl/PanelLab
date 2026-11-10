@@ -147,9 +147,9 @@ def agent_version():
 STRAY_DIR_RE = re.compile(r'^tmp[a-z0-9_]{6,}$')
 
 
-def _excluded(parts):
+def _excluded(parts, root=None):
     # Only top-level stray test directories are dropped; a module such as tmp_utils.py stays.
-    if STRAY_DIR_RE.fullmatch(parts[0]) and (AGENT_DIR / parts[0]).is_dir():
+    if STRAY_DIR_RE.fullmatch(parts[0]) and ((root or AGENT_DIR) / parts[0]).is_dir():
         return True
     return any(p in ('__pycache__', 'tests') or p.endswith('.pyc') for p in parts)
 

@@ -183,7 +183,7 @@ def test_upload_bundle_excludes_tests_and_quotes_path(monkeypatch):
         assert 'panellab_agent/daemon.py' in names
         for n in names:
             assert not n.startswith('tests') and '__pycache__' not in n and not n.endswith('.pyc')
-            assert n != 'pytest.ini' and not any(p.startswith('tmp') for p in n.split('/'))
+            assert n != 'pytest.ini' and not agent_client.STRAY_DIR_RE.fullmatch(n.split('/')[0])
         for m in members:
             assert (m.uid, m.gid, m.uname, m.gname, m.mtime) == (0, 0, 'root', 'root', 0)
             if m.isfile():
@@ -240,6 +240,9 @@ def test_oversize_bundle_is_explicit_error(monkeypatch):
     assert code_of(exc) == ('agent_bundle_too_large', 500)
 
 
-def test_tmp_exclusion_is_narrow():
-    assert agent_client._excluded(('tmprpb9_fib', 'x.py'))
-    assert not agent_client._excluded(('panellab_agent', 'tmp_utils.py'))
+def test_tmp_exclusion_is_narrow(tmp_path):
+    (tmp_path / 'tmpabc123_x').mkdir()
+    (tmp_path / 'tmpabc123_file').write_text('')
+    assert agent_client._excluded(('tmpabc123_x', 'x.py'), tmp_path)
+    assert not agent_client._excluded(('tmpabc123_file',), tmp_path)  # a file is not a stray dir
+    assert not agent_client._excluded(('panellab_agent', 'tmp_utils.py'), tmp_path)
