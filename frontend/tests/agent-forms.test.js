@@ -132,6 +132,21 @@ it('secret only change with no other edits still saves', async () => {
   expect(body(0, 'PUT')).toEqual({ revision: 3, changes: {}, secret_env: { OLD: null } })
 })
 
+it('env_file: create sends it, blank omitted; edit clears with null; unchanged sends nothing; relative rejected', async () => {
+  let w = await mountForm(); await fillNew(w)
+  await t(w, 'jf-save').trigger('click'); await flushPromises()
+  expect('env_file' in body(0, 'POST').job).toBe(false)
+  await t(w, 'jf-env-file').setValue('rel/.env'); await t(w, 'jf-save').trigger('click'); expect(t(w, 'jf-error').text()).toContain('环境变量文件')
+  await t(w, 'jf-env-file').setValue('/srv/.env'); await t(w, 'jf-save').trigger('click'); await flushPromises()
+  expect(body(1, 'POST').job.env_file).toBe('/srv/.env')
+  expect(w.text()).toContain('环境变量文件（可选）'); expect(w.text()).toContain('文件需 panellab 用户可读'); expect(w.text()).toContain('秘密环境变量')
+  w = await mountForm({ job: job({ env_file: '/srv/.env' }) })
+  await t(w, 'jf-name').setValue('n'); await t(w, 'jf-save').trigger('click'); await flushPromises()
+  expect(JSON.parse(fetch.mock.calls.filter(([, o]) => o?.method === 'PUT')[0][1].body).changes).toEqual({ name: 'n' })
+  await t(w, 'jf-env-file').setValue(''); await t(w, 'jf-save').trigger('click'); await flushPromises()
+  expect(JSON.parse(fetch.mock.calls.filter(([, o]) => o?.method === 'PUT')[1][1].body).changes).toEqual({ name: 'n', env_file: null })
+})
+
 it('smtp password never prefilled', async () => {
   const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
   expect(t(w, 'smtp-host').element.value).toBe('smtp.x.com')

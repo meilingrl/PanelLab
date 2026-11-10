@@ -73,7 +73,7 @@ async function sendTest() {
     <div class="ws-row"><div><span class="ws-eyebrow">ALERTS</span><h2>告警设置</h2></div><button type="button" :disabled="busy" @click="emit('cancel')">关闭</button></div>
     <p v-if="loading" class="ws-muted">加载中…</p>
     <p v-else-if="loadError" class="ws-error" role="alert">{{ loadError }}</p>
-    <form v-else @submit.prevent="save">
+    <form v-else @submit.prevent>
       <fieldset :disabled="busy"><legend>邮件（SMTP）</legend>
         <label><input type="checkbox" data-testid="smtp-on" v-model="form.smtpOn"> 启用邮件告警</label>
         <div v-if="form.smtpOn" class="ws-form-grid">
