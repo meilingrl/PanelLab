@@ -66,3 +66,22 @@ def test_install_script_is_strict_and_writes_ctl_wrapper():
     assert re.search(r"^set -eu", text, re.M)
     assert "/usr/local/bin/panellab-agentctl" in text
     assert "PYTHONPATH=/opt/panellab-agent/current" in text
+
+
+def test_ctl_wrapper_leaves_the_callers_directory_before_exec():
+    text = INSTALL.read_text(encoding="utf-8")
+    wrapper = text.split("<<'WRAPPER'", 1)[1].split("\nWRAPPER\n", 1)[0]
+    lines = [l.strip() for l in wrapper.strip().splitlines()]
+    assert lines[0] == "#!/bin/sh"
+    assert "cd / || exit 1" in lines
+    exec_at = next(i for i, l in enumerate(lines) if l.startswith("exec "))
+    assert lines.index("cd / || exit 1") < exec_at
+
+
+def test_unit_does_not_run_from_the_data_dir():
+    assert "WorkingDirectory" not in UNIT.read_text(encoding="utf-8")
+
+
+def test_install_script_runs_from_root_dir():
+    text = INSTALL.read_text(encoding="utf-8")
+    assert re.search(r"^cd /$", text, re.M)

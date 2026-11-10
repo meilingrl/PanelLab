@@ -167,9 +167,23 @@ class Lab:
     def path_exists(self, path: str) -> bool:
         return root("test", "-e", path, check=False).returncode == 0
 
-    def install(self, bundle_dir: str, *flags: str, timeout: float = 300) -> subprocess.CompletedProcess:
-        return dexec("sudo", "-n", "bash", "install.sh", *flags, workdir=bundle_dir,
+    def install(self, bundle_dir: str, *flags: str, timeout: float = 300,
+                cwd: Optional[str] = None) -> subprocess.CompletedProcess:
+        return dexec("sudo", "-n", "bash", bundle_dir + "/install.sh", *flags, workdir=cwd or bundle_dir,
                      timeout=timeout, check=False)
+
+    def plant(self) -> str:
+        """A directory whose panellab_agent/ctl.py and json.py would print PLANTED if imported."""
+        d = "/home/admin/planted"
+        dexec("python3", "-I", "-c", (
+            "import os, sys\n"
+            "d = sys.argv[1]\n"
+            "os.makedirs(os.path.join(d, 'panellab_agent'), exist_ok=True)\n"
+            "open(os.path.join(d, 'panellab_agent', '__init__.py'), 'w').close()\n"
+            "for f in ('panellab_agent/ctl.py', 'json.py'):\n"
+            "    with open(os.path.join(d, f), 'w') as fh:\n"
+            "        fh.write('print(\"PLANTED\")\\nraise SystemExit(0)\\n')\n"), d)
+        return d
 
     # --------------------------------------------------------------- bundle
     def copy_bundle(self, version_override: Optional[str] = None) -> str:
@@ -276,6 +290,13 @@ class Lab:
         self.check("ctl as a non-member exits 4 (permission)", denied.returncode == 4,
                    "rc=%d %s" % (denied.returncode, denied.stderr.strip()))
 
+        planted = self.plant()
+        r = dexec("sudo", "-n", "panellab-agentctl", workdir=planted,
+                  input='{"protocol_version":1,"op":"status"}\n', check=False)
+        self.check("sudo panellab-agentctl ignores code in the current directory",
+                   "PLANTED" not in r.stdout + r.stderr and '"ok": true' in r.stdout,
+                   (r.stdout + r.stderr)[-400:])
+
         r2 = self.install(bundle)
         self.check("second install with same version is a restart",
                    r2.returncode == 0 and "只重启服务" in r2.stdout and self.is_active() == "active",
@@ -360,13 +381,15 @@ class Lab:
         wait_for("lab-slow running", lambda: (self.run_by_id("lab-slow", rid) or {}).get("status") == "running")
         old_pid = self.main_pid()
         began = time.monotonic()
-        r = self.install(bundle)
+        r = self.install(bundle, cwd=self.plant())
         took = time.monotonic() - began
         self.check("upgrade install.sh exits 0", r.returncode == 0, r.stderr[-1500:] + r.stdout[-800:])
         self.check("upgrade waited for the running job (%.1fs)" % took,
                    "排空中：还有 1 个运行未结束" in r.stderr and "排空完成" in r.stdout and took >= 4,
                    (r.stdout + r.stderr)[-800:])
         self.check("upgrade printed what it waits for", "lab-slow" in r.stdout, r.stdout[-600:])
+        self.check("upgrade run from a planted directory never imports it",
+                   "PLANTED" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-400:])
         run = self.run_by_id("lab-slow", rid) or {}
         out = self.ctl("runs.output", {"run_id": rid, "offset": 0, "limit": 4096})
         self.check("running job finished normally during upgrade",

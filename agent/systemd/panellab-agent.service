@@ -10,7 +10,6 @@ Group=panellab
 ExecStart=/usr/bin/python3 -m panellab_agent.daemon --config /etc/panellab-agent/agent.json --data-dir /var/lib/panellab-agent --socket /run/panellab-agent/agent.sock
 Environment=PYTHONPATH=/opt/panellab-agent/current
 Environment=PYTHONUNBUFFERED=1
-WorkingDirectory=/var/lib/panellab-agent
 RuntimeDirectory=panellab-agent
 RuntimeDirectoryMode=0750
 UMask=0007

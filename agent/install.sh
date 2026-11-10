@@ -22,6 +22,9 @@ SOCKET="/run/panellab-agent/agent.sock"
 RELOGIN_NOTE="请重新登录 SSH 使组权限生效"
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
+# Every python3 we start below (ctl, compileall, -c snippets) puts the current
+# directory first on sys.path; run from / so nothing there can be imported as root.
+cd /
 
 say() { printf '%s\n' "$*"; }
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
@@ -58,6 +61,7 @@ write_ctl_wrapper() {
     local tmp="$CTL.tmp.$$"
     cat > "$tmp" <<'WRAPPER'
 #!/bin/sh
+cd / || exit 1
 exec env PYTHONPATH=/opt/panellab-agent/current /usr/bin/python3 -m panellab_agent.ctl "$@"
 WRAPPER
     chown root:root "$tmp"
@@ -101,7 +105,13 @@ if not running:
 if [ "$MODE" = "uninstall" ]; then
     if [ -e "$UNIT_DST" ] || systemctl cat "$SERVICE" >/dev/null 2>&1; then
         drain_running_agent
-        systemctl disable --now "$SERVICE" >/dev/null 2>&1 || true
+        if ! systemctl stop "$SERVICE"; then
+            die "无法停止 $SERVICE，未删除任何文件；请查看 journalctl -u $SERVICE 后重试"
+        fi
+        if service_active; then
+            die "$SERVICE 仍在运行，未删除任何文件"
+        fi
+        systemctl disable "$SERVICE" >/dev/null 2>&1 || true
         rm -f "$UNIT_DST"
         systemctl daemon-reload
         systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || true
@@ -189,7 +199,15 @@ install -d -o "$ACCOUNT" -g "$ACCOUNT" -m 0750 "$CONF_DIR"
 
 # Stage the program next to its final place so the later moves stay on one filesystem.
 STAGE="$PREFIX/.stage-$VERSION.$$"
-cleanup() { rm -rf "$STAGE" "$PREFIX/.old-$VERSION.$$" "$PREFIX/.current.$$"; }
+VDIR="$PREFIX/$VERSION"
+OLD="$PREFIX/.old-$VERSION.$$"
+cleanup() {
+    # Died between the two moves: put the previous copy back instead of losing it.
+    if [ ! -e "$VDIR" ] && [ -d "$OLD" ]; then
+        mv -T "$OLD" "$VDIR" || true
+    fi
+    rm -rf "$STAGE" "$OLD" "$PREFIX/.current.$$"
+}
 trap cleanup EXIT
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
@@ -197,7 +215,6 @@ cp -R "$SRC/panellab_agent" "$STAGE/"
 find "$STAGE" -name '__pycache__' -prune -exec rm -rf {} +
 find "$STAGE" \( -name '*.pyc' -o -name '*.pyo' \) -exec rm -f {} +
 
-VDIR="$PREFIX/$VERSION"
 SAME=0
 if [ -d "$VDIR" ] && diff -r -q --exclude='__pycache__' "$STAGE" "$VDIR" >/dev/null 2>&1; then
     SAME=1
@@ -219,10 +236,10 @@ else
     find "$STAGE" -type f -exec chmod 0644 {} +
     chmod 0755 "$STAGE"
     if [ -e "$VDIR" ]; then
-        mv -T "$VDIR" "$PREFIX/.old-$VERSION.$$"
+        mv -T "$VDIR" "$OLD"
     fi
     mv -T "$STAGE" "$VDIR"
-    rm -rf "$PREFIX/.old-$VERSION.$$"
+    rm -rf "$OLD"
     say "已安装程序到 $VDIR"
 fi
 
@@ -233,7 +250,10 @@ say "current -> $VERSION"
 
 install -o root -g root -m 0644 "$SRC/systemd/panellab-agent.service" "$UNIT_DST"
 systemctl daemon-reload
-systemctl enable "$SERVICE" >/dev/null 2>&1
+if ! systemctl enable "$SERVICE" >/dev/null 2>&1; then
+    systemctl enable "$SERVICE" >&2 || true
+    die "systemctl enable $SERVICE 失败"
+fi
 if service_active; then
     systemctl restart "$SERVICE"
     say "已重启服务 $SERVICE"
