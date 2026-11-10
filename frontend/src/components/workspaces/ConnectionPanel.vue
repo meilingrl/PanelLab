@@ -13,18 +13,18 @@ watch(()=>props.server.id,()=>{editing.value=false})
 function edited(server){editing.value=false;emit('updated',server)}
 // Key login needs a stored key before trust sends credentials; null means not loaded yet.
 const keyMissing=computed(()=>authMode.value==='key'&&!keyState.value?.configured)
-let generation=0,controller
+let generation=0,controller,modeTouched=false
 watch(()=>serverBinding(props.server),async ()=>{
   const id=props.server.id
   const seq=++generation;controller?.abort();controller=new AbortController()
-  info.value=null;probe.value=null;checked.value=null;error.value='';busy.value=false;authMode.value=props.initialAuthMode||'password'
+  modeTouched=false;info.value=null;probe.value=null;checked.value=null;error.value='';busy.value=false;authMode.value=props.initialAuthMode||'password'
   try {
     const result=await api.connection(id,controller.signal);if(seq!==generation)return
     info.value=result;authMode.value=result.auth_mode||props.initialAuthMode||'password'
     // Nothing pinned yet: a server whose key is already saved was set up for key login.
     if(!result.auth_mode&&!props.initialAuthMode){
-      const key=await api.privateKey(id).catch(()=>null)
-      if(seq===generation&&key?.configured&&authMode.value==='password'&&!busy.value&&!probe.value)authMode.value='key'
+      const key=await api.privateKey(id,controller.signal).catch(()=>null)
+      if(seq===generation&&key?.configured&&!modeTouched&&!busy.value&&!probe.value)authMode.value='key'
     }
   }
   catch(e){if(seq===generation&&e.name!=='AbortError')error.value=e.message}
@@ -60,7 +60,7 @@ async function run(action){
     <p v-if="checked" class="ws-muted">检查于 {{ formatTime(checked.observed_at) }} · 主目录 {{ checked.home }}</p>
     <p v-if="info?.fingerprint" class="ws-mono ws-wrap">已保存 {{ info.fingerprint }}</p>
     <div class="ws-row ws-wrap">
-      <label>认证方式 <select v-model="authMode" :disabled="busy" @change="probe=null;checked=null"><option value="password">SSH 密码</option><option value="key">SSH 私钥</option><option value="tailscale">Tailscale SSH（none）</option></select></label>
+      <label>认证方式 <select v-model="authMode" :disabled="busy" @change="modeTouched=true;probe=null;checked=null"><option value="password">SSH 密码</option><option value="key">SSH 私钥</option><option value="tailscale">Tailscale SSH（none）</option></select></label>
       <button data-testid="probe" :disabled="busy" @click="run('probe')">{{ busy?'处理中…':'获取 / 更新主机指纹' }}</button>
       <button v-if="info?.pinned" :disabled="busy||modeChanged||keyMissing" @click="run('check')">检查连接 / 重试</button>
       <button v-if="!editing" :disabled="busy" data-testid="edit-connection" @click="editing=true">编辑连接</button>
