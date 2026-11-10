@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
-import { agentApi, runStatusLabels, triggerLabel, durationText } from '../../composables/useAgentApi'
+import { agentApi, runStatusLabels, triggerLabel, durationText, exitCodeText } from '../../composables/useAgentApi'
 import { formatTime } from '../../composables/useWorkspaceApi'
 import RunOutput from './RunOutput.vue'
 // `changed` asks the page to refetch status and jobs; `edit` carries the job for the form added by Task 11.
@@ -88,7 +88,7 @@ const cron = computed(() => (props.job.schedule?.cron || []).join('；') || '无
       <tbody><tr v-for="r in runs" :key="r.id" data-testid="run-row" :class="{selected: selectedRun?.id === r.id}" tabindex="0" @click="selectedRun = r" @keydown.enter="selectedRun = r">
         <td>{{ r.id }}</td><td>{{ triggerLabel(r) }}</td>
         <td><span class="ws-badge" :class="{good: r.status === 'succeeded', warn: r.status !== 'succeeded' && r.status !== 'running'}">{{ runStatusLabels[r.status] || r.status }}</span></td>
-        <td>{{ formatTime(r.started_at) }}</td><td>{{ durationText(r) }}</td><td>{{ r.exit_code ?? '—' }}</td></tr></tbody>
+        <td>{{ formatTime(r.started_at) }}</td><td>{{ durationText(r) }}</td><td>{{ exitCodeText(r.exit_code) }}</td></tr></tbody>
     </table></div>
     <button v-if="hasMore" data-testid="load-more-runs" :disabled="loadingRuns" @click="loadRuns({ more: true })">加载更早的记录</button>
     <RunOutput v-if="selectedRun && !['missed', 'skipped_overlap'].includes(selectedRun.status)" :key="serverId + ':' + selectedRun.id" :server-id="serverId" :run="selectedRun" @finished="loadRuns()" />

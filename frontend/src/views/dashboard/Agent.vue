@@ -75,6 +75,7 @@ async function refresh() {
   catch (e) { if (seq === generation && e.name !== 'AbortError') notice.value = errorText(e) }
 }
 const mailFailed = computed(() => { const m = agentStatus.value?.mail; return m && m.at && m.ok === false ? m : null })
+const heartbeatFailed = computed(() => { const h = agentStatus.value?.heartbeat; return h && h.configured && h.ok === false ? h : null })
 const mailOk = computed(() => { const m = agentStatus.value?.mail; return m && m.at && m.ok === true ? m : null })
 const openSettings = () => { settings.value = true; editing.value = null }
 const hostLabel = computed(() => hosts.value.find(h => h.id === serverKey.value)?.label || '')
@@ -116,6 +117,7 @@ onBeforeUnmount(() => { generation++; controller?.abort() })
       <div class="ws-row ws-wrap agent-statusbar" data-testid="agent-status"><span class="ws-badge good">Agent 运行中</span>
         <span>{{ agentStatus.hostname }}</span><span class="ws-muted">版本 {{ agentStatus.version }}</span><span class="ws-muted">{{ agentStatus.job_count ?? jobs.length }} 个作业</span>
         <span class="ws-muted">正在运行 {{ (agentStatus.running || []).length }}</span><span v-if="agentStatus.draining" class="ws-badge warn">正在排空</span>
+        <span v-if="heartbeatFailed" class="ws-badge warn" data-testid="agent-heartbeat-failed">心跳请求失败（{{ formatTime(heartbeatFailed.at) }}）</span>
         <button data-testid="agent-upgrade" @click="showUpgrade = !showUpgrade">升级 / 重新安装 Agent</button></div>
       <AgentInstall v-if="showUpgrade" :key="'up' + serverId" :server-id="serverId" :host="hostLabel" :installed-version="String(agentStatus.version || '')" @recheck="load" />
       <section v-if="mailFailed" class="ws-error" role="alert" data-testid="agent-mail-failed">最近一次告警邮件发送失败：{{ mailFailed.error || '未知错误' }}（{{ formatTime(mailFailed.at) }}） <button @click="openSettings">打开告警设置</button></section>

@@ -43,6 +43,11 @@ export function triggerLabel(run) {
   }
   return run.trigger || ''
 }
+// A negative exit code is the signal that ended the process (e.g. -15 = SIGTERM).
+export function exitCodeText(code) {
+  if (code === null || code === undefined) return '—'
+  return code < 0 ? `信号 ${Math.abs(code)}` : String(code)
+}
 export function durationText(run) {
   if (!run.finished_at) return run.status === 'running' ? '进行中' : '—'
   const seconds = Math.max(0, Math.round((Date.parse(run.finished_at) - Date.parse(run.started_at)) / 1000))

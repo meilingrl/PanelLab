@@ -54,7 +54,8 @@ function collect() {
   if (!editing && !ID_RE.test(form.id)) return { error: '作业 ID 只能用小写字母、数字和连字符，以字母或数字开头，最长 48 个字符' }
   if (!command.length || !command[0]) return { error: '命令的第一行（程序路径）不能为空' }
   if (!form.workdir.startsWith('/')) return { error: '工作目录必须是服务器上的绝对路径' }
-  if (form.env_file && (!form.env_file.startsWith('/') || /[\x00-\x1f\x7f]/.test(form.env_file))) return { error: '环境变量文件必须是服务器上的绝对路径，且不能含控制字符' }
+  const envFile = form.env_file.trim()
+  if (envFile && (!envFile.startsWith('/') || /[\x00-\x1f\x7f]/.test(envFile))) return { error: '环境变量文件必须是服务器上的绝对路径，且不能含控制字符' }
   const env = {}
   for (const row of form.env) {
     if (!NAME_RE.test(row.name)) return { error: `环境变量名不合法：${row.name || '（空）'}` }
@@ -79,7 +80,7 @@ function collect() {
     nums[k] = n
   }
   if (!form.tz.trim()) return { error: '请填写时区' }
-  const fields = { name: form.name.trim(), command, workdir: form.workdir, env, env_file: form.env_file || null, schedule: { cron: cronList(), tz: form.tz.trim() }, ...nums, alert: { ...form.alert } }
+  const fields = { name: form.name.trim(), command, workdir: form.workdir, env, env_file: envFile || null, schedule: { cron: cronList(), tz: form.tz.trim() }, ...nums, alert: { ...form.alert } }
   return { fields, secretEnv }
 }
 // An unchanged schedule is already valid on the Agent, so only an edited schedule has to wait for (and pass) its preview.

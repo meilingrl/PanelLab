@@ -1,5 +1,5 @@
 <script setup>
-import { runStatusLabels, durationText } from '../../composables/useAgentApi'
+import { runStatusLabels, durationText, exitCodeText } from '../../composables/useAgentApi'
 // nextRuns: {jobId: 'local time string'}; lastRuns: {jobId: latest run row | null (loaded, none) | undefined (not loaded)}
 defineProps({ jobs: { type: Array, required: true }, nextRuns: { type: Object, default: () => ({}) }, lastRuns: { type: Object, default: () => ({}) }, selectedId: String })
 defineEmits(['select'])
@@ -16,7 +16,7 @@ const nextText = (job, nextRuns) => job.paused ? '—' : !(job.schedule?.cron ||
           <td><strong>{{ job.name }}</strong></td>
           <td><code>{{ cron(job) || '无计划' }}</code> <span class="ws-muted">{{ job.schedule?.tz }}</span></td>
           <td :title="nextRuns[job.id] === false ? '无法计算下次运行时间' : undefined">{{ nextText(job, nextRuns) }}</td>
-          <td><span v-if="lastRuns[job.id]" class="ws-badge" :class="{good: lastRuns[job.id].status==='succeeded', warn: lastRuns[job.id].status!=='succeeded'}">{{ runStatusLabels[lastRuns[job.id].status] || lastRuns[job.id].status }}</span><span v-else class="ws-muted">{{ lastRuns[job.id]===null ? '尚未运行' : '…' }}</span></td>
+          <td><span v-if="lastRuns[job.id]" class="ws-badge" :class="{good: lastRuns[job.id].status==='succeeded', warn: lastRuns[job.id].status!=='succeeded'}" :title="lastRuns[job.id].exit_code == null ? undefined : '退出码：' + exitCodeText(lastRuns[job.id].exit_code)">{{ runStatusLabels[lastRuns[job.id].status] || lastRuns[job.id].status }}</span><span v-else class="ws-muted">{{ lastRuns[job.id]===null ? '尚未运行' : '…' }}</span></td>
           <td>{{ lastRuns[job.id] ? durationText(lastRuns[job.id]) : '—' }}</td>
           <td><span v-if="job.paused" class="ws-badge warn">已暂停</span></td>
         </tr>

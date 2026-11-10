@@ -176,3 +176,26 @@ it('cancel is offered from status running even when a filter hides the running r
   await w.get('[data-testid="confirm-cancel-run"]').trigger('click'); await flushPromises()
   expect(count('POST /api/servers/71/agent/runs/12/cancel')).toBe(1)
 })
+
+it('M8: negative exit codes read as signals in the run history and the job list', async () => {
+  routes['GET /api/servers/71/agent/jobs/backup/runs*'] = () => response({ runs: [run({ id: 6, status: 'cancelled', exit_code: -15 }), run({ id: 5, exit_code: 3 })] })
+  const w = await mountAgent()
+  expect(w.get('[data-testid="job-row"] .ws-badge').attributes('title')).toBe('退出码：信号 15')
+  await w.get('[data-testid="job-row"]').trigger('click'); await flushPromises()
+  const rows = w.findAll('[data-testid="run-row"]').map(r => r.text())
+  expect(rows[0]).toContain('信号 15'); expect(rows[0]).not.toContain('-15')
+  expect(rows[1]).toContain('3')
+})
+
+it('M6: a failed heartbeat shows in the status bar; ok or unconfigured shows nothing', async () => {
+  routes['GET /api/servers/71/agent'] = () => response(status({ heartbeat: { configured: true, at: '2026-11-11T03:00:00Z', ok: false, error: '心跳请求失败' } }))
+  let w = await mountAgent()
+  expect(w.get('[data-testid="agent-heartbeat-failed"]').text()).toMatch(/^心跳请求失败（.+）$/)
+  w.unmount(); wrappers = []
+  for (const hb of [{ configured: true, at: 'x', ok: true, error: null }, { configured: false, at: null, ok: false, error: null }]) {
+    routes['GET /api/servers/71/agent'] = () => response(status({ heartbeat: hb }))
+    w = await mountAgent()
+    expect(w.find('[data-testid="agent-heartbeat-failed"]').exists()).toBe(false)
+    w.unmount(); wrappers = []
+  }
+})
