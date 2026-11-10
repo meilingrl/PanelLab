@@ -1,11 +1,12 @@
 """Owner-scoped trusted remote workspace endpoints."""
 from typing import Annotated
-from fastapi import APIRouter, Depends, Query
+from typing import Any
+from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User
 from routers.auth import get_current_user, require_operator
-from schemas.remote import PrivateKeyRequest, ProbeRequest, TrustRequest, TerminalTicketRequest
+from schemas.remote import ProbeRequest, TrustRequest, TerminalTicketRequest
 from services import remote_connection as connection
 
 router = APIRouter(prefix='/api', tags=['remote'])
@@ -30,9 +31,12 @@ def private_key_summary(server_id: int, db: DB, user: Owner):
 
 
 @router.put('/servers/{server_id}/private-key')
-def set_private_key(server_id: int, body: PrivateKeyRequest, db: DB, user: Owner):
+def set_private_key(server_id: int, db: DB, user: Owner, body: Any = Body(None)):
+    # Accept any JSON so request validation can never echo key material back.
     from services import remote_keys
-    return remote_keys.save(db, user, server_id, body.private_key, body.passphrase)
+    if not isinstance(body, dict):
+        remote_keys.invalid('private_key_invalid', 'Send a JSON object with private_key and optional passphrase')
+    return remote_keys.save(db, user, server_id, body.get('private_key'), body.get('passphrase'))
 
 
 @router.delete('/servers/{server_id}/private-key')

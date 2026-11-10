@@ -77,3 +77,22 @@ it('deleting the saved key disables checking again',async()=>{
  expect(check().attributes('disabled')).toBeDefined()
  expect(w.text()).toContain('先保存私钥')
 })
+
+it('switching servers during an in-flight save leaves the new server editable',async()=>{
+ let release
+ fetch.mockImplementation(async(url,o={})=>{
+  if(url.endsWith('/private-key')&&o.method==='PUT'){await new Promise(r=>{release=r});return response({configured:true,key_type:'ssh-ed25519',fingerprint:'SHA256:old'})}
+  if(url.endsWith('/private-key'))return response({configured:false})
+  if(url.endsWith('/connection'))return response({pinned:false})
+  throw Error('Unexpected '+url)
+ })
+ const w=mountIt(ConnectionPanel,{server,initialAuthMode:'key'});await flushPromises()
+ await w.get('[data-testid="key-text"]').setValue(KEY)
+ await w.get('[data-testid="key-save"]').trigger('click');await flushPromises()
+ await w.setProps({server:{...server,id:72,name:'other'}});await flushPromises()
+ await w.get('[data-testid="key-text"]').setValue('typed for 72')
+ release();await flushPromises()
+ expect(w.get('[data-testid="key-text"]').attributes('disabled')).toBeUndefined()
+ expect(w.get('[data-testid="key-text"]').element.value).toBe('typed for 72')
+ expect(w.find('[data-testid="key-summary"]').exists()).toBe(false)
+})

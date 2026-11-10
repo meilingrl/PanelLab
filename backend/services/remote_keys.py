@@ -14,6 +14,7 @@ from utils.cipher import decrypt_password, encrypt_password
 KEY_TEXT_LIMIT = 16 * 1024
 PASSPHRASE_LIMIT = 1024
 MIN_RSA_BITS = 2048
+SSH_CURVES = {'secp256r1', 'secp384r1', 'secp521r1'}
 PARAMIKO_TYPES = ((ed25519.Ed25519PrivateKey, paramiko.Ed25519Key),
                   (ec.EllipticCurvePrivateKey, paramiko.ECDSAKey),
                   (rsa.RSAPrivateKey, paramiko.RSAKey))
@@ -34,6 +35,16 @@ def _decode(text, passphrase):
         # cryptography reports a missing passphrase, or one given for a plain key, as TypeError.
         if password is None: invalid('private_key_passphrase_required', 'This private key is encrypted; enter its passphrase')
         return load(data, password=None)
+    except ValueError:
+        if password is None: raise
+        # Wrong passphrase only if the key is readable as encrypted; otherwise the key itself is damaged.
+        try:
+            load(data, password=None)
+        except TypeError:
+            invalid('private_key_passphrase_invalid', 'The passphrase does not unlock this private key')
+        except Exception:
+            pass
+        invalid('private_key_invalid', 'The private key could not be read')
 
 
 def parse_private_key(text, passphrase=None):
@@ -49,12 +60,12 @@ def parse_private_key(text, passphrase=None):
     except HTTPException:
         raise
     except Exception:
-        if passphrase:
-            invalid('private_key_passphrase_invalid', 'The passphrase does not unlock this private key')
         invalid('private_key_invalid', 'The private key could not be read')
     kind = next((cls for base, cls in PARAMIKO_TYPES if isinstance(key, base)), None)
     if kind is None:
         invalid('private_key_unsupported', 'Use an Ed25519, ECDSA or RSA (2048-bit or larger) key')
+    if isinstance(key, ec.EllipticCurvePrivateKey) and key.curve.name not in SSH_CURVES:
+        invalid('private_key_unsupported', 'ECDSA keys must use NIST P-256, P-384 or P-521')
     if isinstance(key, rsa.RSAPrivateKey) and key.key_size < MIN_RSA_BITS:
         invalid('private_key_unsupported', 'RSA keys must be at least 2048 bits')
     normalized = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,

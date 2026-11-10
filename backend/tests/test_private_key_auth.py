@@ -149,3 +149,18 @@ def test_deleting_server_removes_its_key(remote):
     assert remote.delete('/api/servers/71').status_code == 200
     with SessionLocal() as db:
         assert db.get(ServerPrivateKey, 71) is None
+
+
+def test_review_edge_cases_return_sanitized_422(remote):
+    # secp256k1 loads in cryptography but has no OpenSSH encoding.
+    k1 = legacy_pem(ec.generate_private_key(ec.SECP256K1()))
+    assert code(put_key(remote, k1)) == 'private_key_unsupported'
+    # A non-object body must not be echoed by request validation.
+    text = openssh(ed25519.Ed25519PrivateKey.generate())
+    array = remote.put('/api/servers/71/private-key', json=[text])
+    assert array.status_code == 422 and 'PRIVATE KEY' not in array.text
+    # A damaged key is reported as damaged even when a passphrase is supplied.
+    lines = openssh(ed25519.Ed25519PrivateKey.generate(), 'secret').splitlines()
+    damaged = '\n'.join(lines[:2] + lines[3:]) + '\n'
+    assert code(put_key(remote, damaged, 'secret')) == 'private_key_invalid'
+    assert code(put_key(remote, openssh(ed25519.Ed25519PrivateKey.generate(), 'secret'), 'wrong')) == 'private_key_passphrase_invalid'

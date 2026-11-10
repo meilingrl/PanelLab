@@ -9,7 +9,7 @@ let generation=0,alive=true
 function clearSecrets(){text.value='';passphrase.value=''}
 function publish(value){info.value=value;emit('change',value)}
 watch(()=>props.serverId,async id=>{
-  const seq=++generation;publish(null);editing.value=false;error.value='';clearSecrets()
+  const seq=++generation;publish(null);editing.value=false;busy.value=false;error.value='';clearSecrets()
   try{const result=await api.privateKey(id);if(seq===generation){publish(result);editing.value=!result.configured}}
   catch(e){if(seq===generation)error.value=e.message}
 },{immediate:true})
@@ -25,9 +25,9 @@ async function save(){
   const seq=generation;busy.value=true;error.value=''
   try{
     const result=await api.setPrivateKey(props.serverId,{private_key:text.value,passphrase:passphrase.value||null})
-    clearSecrets()
-    if(seq===generation&&alive){publish(result);editing.value=false}
-  }catch(e){passphrase.value='';if(seq===generation&&alive)error.value=e.message}
+    // A late reply for a previous server must not touch what was typed for the current one.
+    if(seq===generation&&alive){clearSecrets();publish(result);editing.value=false}
+  }catch(e){if(seq===generation&&alive){passphrase.value='';error.value=e.message}}
   finally{if(seq===generation&&alive)busy.value=false}
 }
 async function remove(){
