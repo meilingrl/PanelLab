@@ -85,3 +85,12 @@ def test_unit_does_not_run_from_the_data_dir():
 def test_install_script_runs_from_root_dir():
     text = INSTALL.read_text(encoding="utf-8")
     assert re.search(r"^cd /$", text, re.M)
+
+
+def test_install_script_undrains_on_failure_after_drain():
+    text = INSTALL.read_text(encoding="utf-8")
+    assert re.search(r"^trap on_exit EXIT$", text, re.M)
+    body = text.split("on_exit() {", 1)[1].split("\n}\n", 1)[0]
+    assert '"$CTL" undrain' in body and "cd /" in body and '"$rc" != 0' in body
+    drain = text.split("drain_running_agent() {", 1)[1].split("\n}\n", 1)[0]
+    assert drain.index("DRAIN_REQUESTED=1") < drain.index('"$CTL" "$@"')

@@ -2,8 +2,12 @@
 
     echo '{"protocol_version":1,"op":"status","args":{}}' | panellab-agentctl
     panellab-agentctl drain [--force]
+    panellab-agentctl undrain
 
-Exit codes: 0 response written to stdout; 1 drain failed or timed out;
+`drain` re-sends the drain op on every poll, which renews the agent's 30 s
+drain lease; if this client dies the agent resumes scheduling by itself.
+
+Exit codes: 0 response written to stdout; 1 drain/undrain failed or timed out;
 2 bad usage or bad JSON on stdin; 3 agent unreachable; 4 permission denied.
 Errors on stderr are one JSON object {"code": ..., "message": ...}.
 """
@@ -130,6 +134,15 @@ def _drain(path: str, force: bool) -> int:
         resp = _call(path, "drain", {})
 
 
+def _undrain(path: str) -> int:
+    resp = _call(path, "undrain", {})
+    _say(resp, sys.stdout)
+    if not resp.get("ok"):
+        return EXIT_FAILED
+    sys.stderr.write("已退出排空状态，恢复调度\n")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="panellab-agentctl",
                                      description="Send one JSON request to the PanelLab Agent.")
@@ -137,6 +150,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub = parser.add_subparsers(dest="command")
     drain = sub.add_parser("drain", help="stop starting runs and wait for running ones")
     drain.add_argument("--force", action="store_true", help="cancel running runs")
+    sub.add_parser("undrain", help="leave the drain state and resume scheduling")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -144,6 +158,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.command == "drain":
             return _drain(args.socket, args.force)
+        if args.command == "undrain":
+            return _undrain(args.socket)
         return _forward(args.socket)
     except _Fail as fail:
         _say({"code": fail.code, "message": fail.message}, sys.stderr)

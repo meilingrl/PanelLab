@@ -391,6 +391,31 @@ class Lab:
         mail = self.wait_mail(r"作业失败：Lab sleep", mark)
         self.check("agent_lost alert mail received", bool(mail), mail["subject"])
 
+    def verify_drain_lease(self) -> None:
+        """R23: a drain whose ctl client dies ends by itself when the 30 s lease runs out."""
+        rid = self.ctl("jobs.run_now", {"id": "lab-sleep"})["run_id"]
+        wait_for("lab-sleep to be running", lambda: (self.run_by_id("lab-sleep", rid) or {}).get("status") == "running")
+        mark = len(self.mails())
+        dexec("sh", "-c", "nohup panellab-agentctl drain >/dev/null 2>&1 &")
+        wait_for("agent to be draining", lambda: self.ctl("status")["draining"] is True, timeout=15)
+        wait_for("ctl drain client", lambda: dexec("pgrep", "-f", "panellab_agent.ctl drain",
+                                                   check=False).returncode == 0, timeout=10)
+        dexec("pkill", "-f", "panellab_agent.ctl drain", check=False)
+        gone = wait_for("ctl drain client to die", lambda: dexec("pgrep", "-f", "panellab_agent.ctl drain",
+                                                                check=False).returncode != 0, timeout=10)
+        self.check("ctl drain client killed while the agent drains", bool(gone) and self.ctl("status")["draining"])
+        killed_at = time.monotonic()
+        wait_for("drain lease to expire", lambda: self.ctl("status")["draining"] is False, timeout=60, interval=1)
+        took = time.monotonic() - killed_at
+        self.check("drain lease expired without the client: status.draining == false (%.0fs)" % took,
+                   self.ctl("status")["draining"] is False and took >= 15)
+        mail = self.wait_mail(r"Agent 已退出排空状态", mark)
+        self.check("lease expiry sends the resume notice", "已恢复调度" in mail["body"], mail["body"][-200:])
+        self.ctl("runs.cancel", {"run_id": rid})
+        run = self.wait_run_done("lab-sleep", rid, timeout=45)
+        self.check("job kept running through the lapsed drain until cancelled", run["status"] == "cancelled",
+                   json.dumps(run))
+
     def verify_restart_interrupts(self) -> None:
         """R22: systemctl restart gives a running job 60 s, then cancels it with one notice."""
         rid = self.ctl("jobs.run_now", {"id": "lab-sleep"})["run_id"]
@@ -762,6 +787,7 @@ def main() -> int:
         lab.verify_install(bundle, agent_before)
         lab.verify_protocol_and_alerts()
         lab.verify_crash_restart()
+        lab.verify_drain_lease()
         lab.verify_restart_interrupts()
         lab.verify_upgrade_drains()
         lab.verify_uninstall(agent_before)

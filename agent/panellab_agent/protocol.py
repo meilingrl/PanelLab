@@ -388,6 +388,10 @@ def op_drain(agent, args):
     return agent.drain(force=force)
 
 
+def op_undrain(agent, args):
+    return agent.undrain()
+
+
 OPS: Dict[str, Callable[[Any, Dict[str, Any]], Any]] = {
     "status": op_status,
     "jobs.list": op_jobs_list,
@@ -406,6 +410,7 @@ OPS: Dict[str, Callable[[Any, Dict[str, Any]], Any]] = {
     "alerts.configure": op_alerts_configure,
     "alerts.test_email": op_alerts_test_email,
     "drain": op_drain,
+    "undrain": op_undrain,
 }
 
 

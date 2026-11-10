@@ -234,7 +234,10 @@ def test_drain_refuses_new_runs(rig, tmp_path):
     res = ok(call(a, "drain"))
     assert res["draining"] is True and res["active_count"] == 0
     assert err(call(a, "jobs.run_now", id="j")) == "draining"
-    rig.clock.advance(60)
+    for _ in range(2):  # ctl drain renews the 30 s lease while it waits
+        rig.clock.advance(25)
+        ok(call(a, "drain"))
+    rig.clock.advance(10)
     a.tick()
     assert a.store.list_runs("j") == []
     assert ok(call(a, "status"))["draining"] is True

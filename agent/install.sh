@@ -6,7 +6,7 @@
 #   sudo bash install.sh --uninstall          stop the service, remove program and unit; keep data
 #   sudo bash install.sh --uninstall --purge  also delete /var/lib/panellab-agent and /etc/panellab-agent
 #
-# Idempotent: running it again with the same version only restarts the service.
+# Idempotent: running it again with the same version still drains, then restarts the service.
 # It never touches the existing account named "agent".
 set -eu
 
@@ -56,6 +56,23 @@ fi
 
 service_active() { systemctl is-active --quiet "$SERVICE"; }
 
+# Set once a drain was requested. If the script then fails, the EXIT trap tells
+# the agent to resume scheduling (its drain lease would also expire in 30 s).
+DRAIN_REQUESTED=0
+INSTALL_CLEANUP=0
+on_exit() {
+    rc=$?
+    if [ "$INSTALL_CLEANUP" = 1 ]; then
+        cleanup
+    fi
+    if [ "$rc" != 0 ] && [ "$DRAIN_REQUESTED" = 1 ] && [ -x "$CTL" ]; then
+        if (cd / && "$CTL" undrain >/dev/null 2>&1); then
+            say "未能完成：已让 Agent 退出排空状态，恢复调度" >&2
+        fi
+    fi
+}
+trap on_exit EXIT
+
 write_ctl_wrapper() {
     install -d -o root -g root -m 0755 "$(dirname "$CTL")"
     local tmp="$CTL.tmp.$$"
@@ -93,9 +110,10 @@ if not running:
     else
         set -- drain
     fi
+    DRAIN_REQUESTED=1
     if ! "$CTL" "$@" >/dev/null; then
-        say "排空没有完成。Agent 仍处于排空状态（不会启动新运行）。" >&2
-        say "可以加 --force 重新执行以取消正在运行的作业，或执行 systemctl restart $SERVICE 恢复运行。" >&2
+        say "排空没有完成：没有切换版本，也没有停止服务。" >&2
+        say "可以加 --force 重新执行，以取消正在运行的作业。" >&2
         exit 1
     fi
     say "排空完成"
@@ -208,7 +226,7 @@ cleanup() {
     fi
     rm -rf "$STAGE" "$OLD" "$PREFIX/.current.$$"
 }
-trap cleanup EXIT
+INSTALL_CLEANUP=1
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp -R "$SRC/panellab_agent" "$STAGE/"
@@ -221,7 +239,7 @@ if [ -d "$VDIR" ] && diff -r -q --exclude='__pycache__' "$STAGE" "$VDIR" >/dev/n
 fi
 CURRENT_TARGET="$(readlink "$PREFIX/current" 2>/dev/null || true)"
 if [ "$SAME" = 1 ] && [ "$CURRENT_TARGET" = "$VERSION" ]; then
-    say "版本 $VERSION 已安装且文件相同，只重启服务"
+    say "版本 $VERSION 已安装且文件相同：排空后只重启服务"
 fi
 
 write_ctl_wrapper

@@ -489,3 +489,79 @@ def test_sigterm_lets_short_jobs_finish_without_notice(rig, tmp_path):
     assert a.store.get_run(rid)["status"] == "succeeded"
     rig.wait_mail(a)
     assert not any("中断" in s for s in rig.mailer.subjects())
+
+
+# ------------------------------------------------------------ R23: drain lease
+
+def test_drain_lease_expiry_undrains_and_notifies(rig, tmp_path, capsys):
+    a = rig.agent()
+    ok(call(a, "drain"))
+    rig.clock.advance(29)
+    a.tick()
+    assert a.draining
+    rig.clock.advance(2)
+    a.tick()
+    assert not a.draining
+    assert ok(call(a, "status"))["draining"] is False
+    assert "drain lease expired" in capsys.readouterr().err
+    rig.wait_mail(a)
+    (subject, body), = [(s, b) for s, b in rig.mailer.sent if "Agent 已退出排空状态" in s]
+    assert "排空未完成（安装/升级可能中断），已恢复调度" in body
+    rig.clock.advance(60)
+    a.tick()
+    rig.wait_mail(a)
+    assert sum("已退出排空状态" in s for s in rig.mailer.subjects()) == 1
+
+
+def test_drain_renewal_keeps_draining(rig):
+    a = rig.agent()
+    ok(call(a, "drain"))
+    for _ in range(6):
+        rig.clock.advance(10)
+        ok(call(a, "drain"))
+        a.tick()
+        assert a.draining
+    rig.wait_mail(a)
+    assert not any("排空" in s for s in rig.mailer.subjects())
+
+
+def test_undrain_op_resumes_scheduling_without_notice(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/true"],
+                                          schedule={"cron": ["* * * * *"], "tz": "UTC"})))
+    ok(call(a, "drain"))
+    rig.clock.advance(20)
+    a.tick()  # 12:00:20, nothing due yet; last_scheduled stays at 12:00:00
+    assert a.store.get_meta("last_scheduled") is None or \
+        a.store.get_meta("last_scheduled") <= T0.isoformat()
+    res = ok(call(a, "undrain"))
+    assert res["draining"] is False and not a.draining
+    rig.clock.advance(45)
+    a.tick()  # 12:01:05: the 12:01 slot starts normally
+    assert [r["trigger"] for r in a.store.list_runs("j")] == ["schedule"]
+    rig.wait_mail(a)
+    assert not any("排空" in s for s in rig.mailer.subjects())
+
+
+def test_sigterm_drain_has_no_lease(rig):
+    a = rig.agent()
+    a.begin_shutdown()
+    ok(call(a, "drain"))
+    ok(call(a, "undrain"))
+    rig.clock.advance(120)
+    a.tick()
+    assert a.draining
+
+
+def test_ctl_undrain(rig, short_dir, monkeypatch):
+    a = rig.agent()
+    path = os.path.join(short_dir, "u.sock")
+    server = _serve(a, path)
+    try:
+        ok(call(a, "drain"))
+        code, out, _ = _ctl(monkeypatch, ["--socket", path, "undrain"])
+        assert code == 0 and json.loads(out)["result"]["draining"] is False
+        assert not a.draining
+    finally:
+        server.shutdown()
+        server.server_close()

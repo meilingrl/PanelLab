@@ -47,6 +47,9 @@ PRUNE_INTERVAL_S = 3600
 MAX_REQUEST = 1024 * 1024
 SOCKET_TIMEOUT_S = 30
 DRAIN_GRACE_S = 60
+# The drain op is a lease: `ctl drain` renews it on every poll while it waits.
+# If nobody renews it (installer killed, SSH dropped) the agent resumes.
+DRAIN_LEASE_S = 30
 # SIGTERM (systemctl stop/restart, reboot): running jobs get this long to end
 # on their own before they are cancelled (TERM, then KILL after 30 s).
 SHUTDOWN_GRACE_S = 60
@@ -317,6 +320,7 @@ class Agent:
         self.server_tz = server_tz or server_timezone()
         self.started_at = self.clock.now().isoformat()
         self._draining = False
+        self._drain_until: Optional[float] = None
         self._stopping = False  # SIGTERM: internal drain, no lease
         self._shutdown_began: Optional[float] = None
         self._shutdown_cancelled = False
@@ -469,8 +473,10 @@ class Agent:
             return self.runner.start(job, "manual", None)
 
     def drain(self, force: bool = False) -> Dict[str, Any]:
+        """Start or renew a drain lease of DRAIN_LEASE_S."""
         with self._lock:
             self._draining = True
+            self._drain_until = self.clock.monotonic() + DRAIN_LEASE_S
         self.runner.drop_retries()
         running = self.store.running_runs()
         if force:
@@ -482,6 +488,26 @@ class Agent:
             timeouts.append(int(job["timeout_seconds"]) if job else 3600)
         return {"draining": True, "active_count": self.runner.active_count(),
                 "wait_seconds": max(timeouts, default=0) + DRAIN_GRACE_S}
+
+    def undrain(self) -> Dict[str, Any]:
+        """End an external drain now (the SIGTERM shutdown is not affected)."""
+        with self._lock:
+            was = self._draining
+            self._draining = False
+            self._drain_until = None
+        if was:
+            _log("drain ended by request; scheduling resumed")
+        return {"draining": self.draining}
+
+    def _check_drain_lease(self) -> None:
+        with self._lock:
+            if not self._draining or self._drain_until is None \
+                    or self.clock.monotonic() <= self._drain_until:
+                return
+            self._draining = False
+            self._drain_until = None
+        _log("drain lease expired without renewal; scheduling resumed")
+        self.alerts.notify("Agent 已退出排空状态", "排空未完成（安装/升级可能中断），已恢复调度")
 
     # ---- SIGTERM shutdown (R22) --------------------------------------------
 
@@ -572,6 +598,7 @@ class Agent:
 
     def tick(self) -> None:
         now = self.clock.now()
+        self._phase("drain_lease", self._check_drain_lease)
         self._phase("schedule", lambda: self._schedule(now))
         self._phase("runner", self._poll_runner)
         if self._due("cpu_mem", CPU_MEM_INTERVAL_S):
