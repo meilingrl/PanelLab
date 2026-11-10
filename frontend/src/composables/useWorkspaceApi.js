@@ -25,6 +25,7 @@ const query = values => {
 export const workspaceApi={
   servers:(signal)=>request('/servers',{signal}),
   addServer:(body)=>request('/servers',{method:'POST',body}),
+  updateServer:(id,body)=>request(`/servers/${id}`,{method:'PUT',body}),
   connection:(id,signal)=>request(`/servers/${id}/connection`,{signal}),
   probe:(id,auth_mode)=>request(`/servers/${id}/connection/probe`,{method:'POST',body:{auth_mode}}),
   trust:(id,token)=>request(`/servers/${id}/connection/trust`,{method:'POST',body:{token}}),
