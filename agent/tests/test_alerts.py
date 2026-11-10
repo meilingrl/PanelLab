@@ -281,7 +281,10 @@ def test_non_ascii_password_is_auth_failed_and_not_leaked(tmp_path):
         exc = ei.value
         assert exc.code == "auth_failed"
         assert "Zq9" not in str(exc) and "Zq9" not in repr(exc)
-        assert exc.__cause__ is None and exc.__suppress_context__
+        assert exc.__cause__ is None and exc.__context__ is None
+        import traceback
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        assert "Zq9" not in tb
         assert "Zq9" not in repr(e.mailer.last_result())
         assert e.mailer.last_result()["ok"] is False
     finally:
@@ -312,3 +315,23 @@ def test_bad_port_is_recorded_not_raised_raw(tmp_path, server):
         e.mailer.send("s", "b")
     assert ei.value.code == "connect_failed"
     assert e.mailer.last_result()["ok"] is False
+
+
+def test_invalid_config_shapes_are_mail_errors(tmp_path, server):
+    e = Env(tmp_path, server.port)
+    e.config = {"smtp": "oops"}
+    with pytest.raises(MailError) as ei:
+        e.mailer.send("s", "b")
+    assert ei.value.code == "not_configured" and ei.value.message == "告警邮件配置无效"
+    assert ei.value.__context__ is None
+    assert e.mailer.last_result()["ok"] is False
+
+    def boom():
+        raise RuntimeError("x")
+
+    m = Mailer(boom, lambda: None, e.clock)
+    with pytest.raises(MailError) as ei:
+        m.send("s", "b")
+    assert ei.value.code == "not_configured" and ei.value.__context__ is None
+    assert m.last_result()["error"] == "告警邮件配置无效"
+    e.book.observe("k", True, "s", "b")  # still no exception via AlertBook

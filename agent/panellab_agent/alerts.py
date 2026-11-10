@@ -49,33 +49,60 @@ class Mailer:
             raise
         self._record(True, None)
 
+    def _parse_config(self) -> Optional[Dict[str, Any]]:
+        """Return a normalised config, or None if it is unusable."""
+        try:
+            smtp_cfg = (self._config() or {}).get("smtp") or {}
+            security = smtp_cfg.get("security") or "starttls"
+            username = smtp_cfg.get("username")
+            return {
+                "host": smtp_cfg.get("host"),
+                "recipients": [r for r in (smtp_cfg.get("to") or []) if r],
+                "security": security,
+                "username": username,
+                "port": smtp_cfg.get("port") or (465 if security == "ssl" else 25),
+                "sender": smtp_cfg.get("from") or username or "panellab@localhost",
+            }
+        except Exception:
+            return None
+
     def _send(self, subject: str, body: str) -> None:
-        smtp_cfg = (self._config() or {}).get("smtp") or {}
-        host = smtp_cfg.get("host")
-        recipients = [r for r in (smtp_cfg.get("to") or []) if r]
-        if not host or not recipients:
+        # Failures are only flagged inside except blocks and raised outside them,
+        # so the MailError never carries an original exception as __context__.
+        cfg = self._parse_config()
+        if cfg is None:
+            raise MailError("not_configured", "告警邮件配置无效")
+        if not cfg["host"] or not cfg["recipients"]:
             raise MailError("not_configured", NOT_CONFIGURED_MESSAGE)
-        security = smtp_cfg.get("security") or "starttls"
-        if security not in ("starttls", "ssl", "none"):
+        if cfg["security"] not in ("starttls", "ssl", "none"):
             raise MailError("not_configured", "告警邮件安全方式无效")
-        username = smtp_cfg.get("username")
+        failure = self._deliver(cfg, subject, body)
+        if failure is not None:
+            raise MailError(failure, _MESSAGES[failure])
+
+    def _deliver(self, cfg: Dict[str, Any], subject: str, body: str) -> Optional[str]:
+        """Attempt delivery; return a failure code or None on success."""
+        security = cfg["security"]
+        username = cfg["username"]
         client = None
         phase = "connect_failed"
+        failure = None
         try:
-            port = int(smtp_cfg.get("port") or (465 if security == "ssl" else 25))
-            sender = smtp_cfg.get("from") or username or "panellab@localhost"
+            port = int(cfg["port"])
+            sender = _flat(cfg["sender"])
+            recipients = [_flat(r) for r in cfg["recipients"]]
             msg = EmailMessage()
-            msg["From"] = _flat(sender)
-            msg["To"] = ", ".join(_flat(r) for r in recipients)
+            msg["From"] = sender
+            msg["To"] = ", ".join(recipients)
             msg["Subject"] = _flat(subject)
             msg["Date"] = format_datetime(self._clock.now())
             msg.set_content(body, charset="utf-8", cte="quoted-printable")
 
             if security == "ssl":
-                client = smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT,
+                client = smtplib.SMTP_SSL(cfg["host"], port, timeout=SMTP_TIMEOUT,
                                           context=ssl.create_default_context())
             else:
-                client = smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT)
+                client = smtplib.SMTP(cfg["host"], port, timeout=SMTP_TIMEOUT)
             client.ehlo()
             if security == "starttls":
                 client.starttls(context=ssl.create_default_context())
@@ -84,16 +111,11 @@ class Mailer:
                 phase = "auth_failed"
                 client.login(username, self._password() or "")
             phase = "send_failed"
-            client.send_message(msg, from_addr=_flat(sender),
-                                to_addrs=[_flat(r) for r in recipients])
-        except MailError:
-            raise
+            client.send_message(msg, from_addr=sender, to_addrs=recipients)
         except smtplib.SMTPAuthenticationError:
-            raise MailError("auth_failed", _MESSAGES["auth_failed"]) from None
-        except BaseException as exc:
-            if not isinstance(exc, Exception):
-                raise
-            raise MailError(phase, _MESSAGES[phase]) from None
+            failure = "auth_failed"
+        except Exception:
+            failure = phase
         finally:
             if client is not None:
                 try:
@@ -103,6 +125,7 @@ class Mailer:
                         client.close()
                     except Exception:
                         pass
+        return failure
 
 
 def _flat(text: Any) -> str:
