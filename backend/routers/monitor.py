@@ -1,7 +1,6 @@
-"""系统监控：CPU、内存、磁盘、网络快照（本机 + 可选远程 Linux）。"""
+"""系统监控：本机快照，以及经固定主机指纹连接的共享服务器快照。"""
 from __future__ import annotations
 
-import json
 import os
 import time
 from collections import deque
@@ -14,16 +13,14 @@ except ImportError:
 
 import psutil
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from config import get_settings
 from database import get_db
 from models.monitor_remote import MonitorRemoteConfig
+from models.server import Server
 from models.user import User
 from routers.auth import get_current_user
-from utils.cipher import decrypt_password, encrypt_password
+from services.remote_connection import connection_summary, fail
 
 router = APIRouter(prefix="/api/monitor", tags=["monitor"])
 
@@ -32,46 +29,6 @@ _net_last_ts: Optional[float] = None
 _net_last_sent: Optional[int] = None
 _net_last_recv: Optional[int] = None
 _network_history: deque = deque(maxlen=60)
-
-
-class RemoteConfigBody(BaseModel):
-    host: str = Field(..., min_length=1, max_length=255, description="主机 IP 或域名")
-    port: int = Field(22, ge=1, le=65535)
-    username: str = Field(..., min_length=1, max_length=64)
-    password: str = Field(..., min_length=1, description="SSH 登录密码")
-
-# 在远程 Linux 上通过 python3 - 从 stdin 执行的采集脚本，需输出与本机同结构的 JSON
-REMOTE_SCRIPT = """
-import json, psutil
-try:
-    cpu = psutil.cpu_percent(interval=None)
-except Exception:
-    cpu = None
-try:
-    v = psutil.virtual_memory()
-    mem = {"total_mb": round(v.total/(1024*1024),1), "available_mb": round(v.available/(1024*1024),1), "used_mb": round(v.used/(1024*1024),1), "percent": round(v.percent,1)}
-except Exception:
-    mem = None
-disk = []
-try:
-    for p in psutil.disk_partitions(all=False):
-        try:
-            u = psutil.disk_usage(p.mountpoint)
-            disk.append({"mountpoint": p.mountpoint, "total_gb": round(u.total/(1024**3),2), "used_gb": round(u.used/(1024**3),2), "free_gb": round(u.free/(1024**3),2), "percent": round(u.percent,1)})
-        except (PermissionError, OSError):
-            pass
-    if not disk:
-        u = psutil.disk_usage("/")
-        disk = [{"mountpoint": "/", "total_gb": round(u.total/(1024**3),2), "used_gb": round(u.used/(1024**3),2), "free_gb": round(u.free/(1024**3),2), "percent": round(u.percent,1)}]
-except Exception:
-    pass
-try:
-    n = psutil.net_io_counters()
-    net = {"bytes_sent": n.bytes_sent, "bytes_recv": n.bytes_recv} if n else None
-except Exception:
-    net = None
-print(json.dumps({"cpu_percent": cpu, "memory": mem, "disk": disk, "network": net}))
-"""
 
 
 def _get_cpu() -> Optional[float]:
@@ -165,178 +122,41 @@ def _get_stats_local() -> Dict[str, Any]:
     }
 
 
-def _ssh_run_and_get_stats(host: str, port: int, username: str, password: str) -> Optional[Dict[str, Any]]:
-    """通过 SSH 在指定主机上执行采集脚本，返回同结构的 JSON。"""
-    try:
-        import paramiko
-    except ImportError:
-        return None
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        client.connect(
-            hostname=host,
-            port=port,
-            username=username,
-            password=password,
-            timeout=15,
-            allow_agent=False,
-            look_for_keys=False,
-        )
-        chan = client.get_transport().open_session()
-        chan.setblocking(True)
-        chan.exec_command("python3 -")
-        chan.sendall(REMOTE_SCRIPT.encode("utf-8"))
-        chan.shutdown_write()
-        stdout = b""
-        while True:
-            buf = chan.recv(4096)
-            if not buf:
-                break
-            stdout += buf
-        chan.close()
-        client.close()
-        out = stdout.decode("utf-8", errors="replace").strip()
-        if not out:
-            return None
-        return json.loads(out)
-    except Exception:
-        return None
-
-
 @router.get("/remote-config")
-def get_remote_config(
+def get_legacy_remote_config(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """返回当前用户保存的远程连接配置（不含密码）。"""
+    """Report a pre-workspace remote config so the user can delete it. It is never used to connect."""
     row = db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).first()
     if not row:
-        return {"configured": False}
-    return {
-        "configured": True,
-        "host": row.host,
-        "port": row.port,
-        "username": row.username,
-    }
+        return {"legacy_configured": False}
+    return {"legacy_configured": True, "host": row.host, "port": row.port, "username": row.username}
 
 
-@router.put("/remote-config")
-def put_remote_config(
-    body: RemoteConfigBody,
+@router.delete("/remote-config")
+def delete_legacy_remote_config(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """保存当前用户的远程连接配置（IP、端口、用户名、密码），密码加密存储。"""
-    settings = get_settings()
-    encrypted = encrypt_password(settings.secret_key, body.password)
-    row = db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).first()
-    if row:
-        row.host = body.host.strip()
-        row.port = body.port
-        row.username = body.username.strip()
-        row.password_encrypted = encrypted
-    else:
-        row = MonitorRemoteConfig(
-            user_id=current_user.id,
-            host=body.host.strip(),
-            port=body.port,
-            username=body.username.strip(),
-            password_encrypted=encrypted,
-        )
-        db.add(row)
+    """Remove the legacy record, including its stored encrypted password."""
+    db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).delete()
     db.commit()
-    return {"message": "已保存，可在上方选择「远程服务器」查看监控。"}
-
-
-def _ssh_install_psutil(host: str, port: int, username: str, password: str) -> Dict[str, Any]:
-    """通过 SSH 在目标机安装 psutil：优先 apt（Debian/Ubuntu），失败再试 pip。返回 { "ok": bool, "message"?: str, "detail"?: str }。"""
-    try:
-        import paramiko
-    except ImportError:
-        return {"ok": False, "detail": "后端未安装 paramiko，无法执行远程命令"}
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        client.connect(
-            hostname=host,
-            port=port,
-            username=username,
-            password=password,
-            timeout=15,
-            allow_agent=False,
-            look_for_keys=False,
-        )
-
-        def run_cmd(command: str, timeout: int = 90) -> tuple[int, str, str]:
-            stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-            out = (stdout.read() or b"").decode("utf-8", errors="replace").strip()
-            err = (stderr.read() or b"").decode("utf-8", errors="replace").strip()
-            code = stdout.channel.recv_exit_status()
-            return code, out, err
-
-        # 1. 优先用 apt（Debian/Ubuntu），不依赖 pip，且不受 PEP 668 限制
-        apt_cmd = "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y python3-psutil 2>&1"
-        code, out, err = run_cmd(apt_cmd)
-        combined_apt = (out + "\n" + err).lower()
-        if code == 0:
-            client.close()
-            return {"ok": True, "message": "已通过 apt 在远程主机安装或确认 python3-psutil"}
-        if "is already the newest" in combined_apt or "already installed" in combined_apt or "0 upgraded" in combined_apt:
-            client.close()
-            return {"ok": True, "message": "远程主机已安装 python3-psutil，无需重复安装"}
-
-        # 2. apt 不可用（非 Debian/无权限/无包）时再试 pip
-        pip_cmd = "python3 -m pip install --user psutil 2>&1 || pip3 install --user psutil 2>&1"
-        code, out, err = run_cmd(pip_cmd, timeout=60)
-        client.close()
-        combined = (out + "\n" + err).lower()
-        if code == 0 or "Successfully installed" in out or "already satisfied" in combined:
-            return {"ok": True, "message": "已在远程主机成功安装或已存在 psutil"}
-        if "externally-managed-environment" in combined or "externally managed" in combined:
-            return {
-                "ok": True,
-                "message": "远程为受管 Python 环境，已收到反馈。若需使用监控，请在该主机执行: apt install python3-psutil",
-            }
-        return {"ok": False, "detail": (out or err) or f"退出码 {code}"}
-    except Exception as e:
-        return {"ok": False, "detail": str(e)}
-
-
-@router.post("/remote-install-psutil")
-def post_remote_install_psutil(
-    current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-):
-    """在已配置的远程主机上执行安装 psutil；未配置返回 503。"""
-    row = db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).first()
-    if not row:
-        return JSONResponse(
-            status_code=503,
-            content={"ok": False, "detail": "请先保存远程服务器连接配置。"},
-        )
-    settings = get_settings()
-    password = decrypt_password(settings.secret_key, row.password_encrypted)
-    if not password:
-        return JSONResponse(
-            status_code=503,
-            content={"ok": False, "detail": "远程配置已损坏，请重新保存连接信息。"},
-        )
-    result = _ssh_install_psutil(row.host, row.port, row.username, password)
-    if result["ok"]:
-        return result
-    return JSONResponse(status_code=502, content=result)
+    return {"legacy_configured": False}
 
 
 @router.get("/hosts")
-def get_hosts(_user: Annotated[User, Depends(get_current_user)]):
-    """返回可选的监控目标列表（本机 + 远程）。下拉框始终显示两项，未配置时选远程会提示在页面下方配置。"""
-    return {
-        "hosts": [
-            {"id": "local", "label": "本机"},
-            {"id": "remote", "label": "远程服务器"},
-        ]
-    }
+def get_hosts(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """本机 + 当前用户在任务工作区添加的服务器；只有已确认指纹的服务器可以采集。"""
+    hosts = [{"id": "local", "label": "本机", "pinned": True}]
+    rows = db.query(Server).filter(Server.user_id == current_user.id).order_by(Server.name).all()
+    for row in rows:
+        pinned = connection_summary(db, current_user, row.id)["pinned"]
+        hosts.append({"id": f"server:{row.id}", "label": f"{row.name} · {row.host}", "pinned": pinned})
+    return {"hosts": hosts}
 
 
 def _get_processes_list(limit: int = 50, sort_by: str = "cpu_percent", name_filter: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -406,28 +226,15 @@ def get_processes(
 def get_stats(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-    target: str = Query("local", description="local | remote"),
+    target: str = Query("local", max_length=32, description="local | server:<id>"),
 ):
-    """返回指定目标（本机或远程）的 CPU、内存、磁盘、网络快照，需登录。"""
+    """本机或已确认指纹的共享服务器的 CPU、内存、磁盘、网络快照。"""
+    if target == "local":
+        return _get_stats_local()
     if target == "remote":
-        row = db.query(MonitorRemoteConfig).filter(MonitorRemoteConfig.user_id == current_user.id).first()
-        if not row:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "请先在下方配置远程服务器连接。"},
-            )
-        settings = get_settings()
-        password = decrypt_password(settings.secret_key, row.password_encrypted)
-        if not password:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "远程配置已损坏，请重新保存连接信息。"},
-            )
-        data = _ssh_run_and_get_stats(row.host, row.port, row.username, password)
-        if data is None:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "远程服务器暂不可用，请检查 IP、端口、用户名与密码及网络。"},
-            )
-        return data
-    return _get_stats_local()
+        fail("legacy_remote_removed", "旧版远程监控连接已停用，请在任务工作区添加服务器并确认主机指纹", 410)
+    prefix, _, value = target.partition(":")
+    if prefix != "server" or not value.isdigit() or not 0 < int(value) <= 2**62:
+        fail("invalid_target", "Unknown monitor target", 422)
+    from services import remote_monitor
+    return remote_monitor.stats(db, current_user, int(value))
