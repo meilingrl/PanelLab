@@ -107,3 +107,14 @@ it('rebuilds the traffic chart after a failed poll replaces its canvas, and tole
     expect(charts[0].destroyed).toBe(true)
   } finally { vi.useRealTimers() }
 })
+
+it('explains that the local target is the panel container when the backend says so', async () => {
+  const base = fetch.getMockImplementation()
+  fetch.mockImplementation(async (url, o) => url === '/api/monitor/hosts'
+    ? response({ hosts: [{ id: 'local', label: '面板容器', pinned: true, note: '面板运行在 Docker 中，不是你的电脑' }, { id: 'server:71', label: 'trainer', pinned: true }] })
+    : base(url, o))
+  const w = await mountMonitor()
+  expect(w.get('[data-testid="target-note"]').text()).toContain('不是你的电脑')
+  await w.get('#monitor-target').setValue('server:71'); await flushPromises()
+  expect(w.find('[data-testid="target-note"]').exists()).toBe(false)
+})

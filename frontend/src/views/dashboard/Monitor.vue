@@ -265,6 +265,7 @@ onUnmounted(() => {
       </select>
       <span class="subtitle">CPU、内存、磁盘与网络，每 5 秒刷新。远程服务器来自<router-link to="/workspaces">任务工作区</router-link>，经已确认的主机指纹连接。</span>
     </div>
+    <p v-if="hosts.find(h => h.id === currentTarget)?.note" class="muted" data-testid="target-note">{{ hosts.find(h => h.id === currentTarget).note }}</p>
 
     <div v-if="loading && !stats" class="state state-loading">加载中…</div>
     <div v-else-if="error && !stats" class="state state-error">{{ error }}</div>

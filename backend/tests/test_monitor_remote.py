@@ -62,7 +62,9 @@ def remote(monkeypatch):
     return calls, queue
 
 
-def test_hosts_list_local_and_owned_servers_with_trust_state(api):
+def test_hosts_list_local_and_owned_servers_with_trust_state(api, monkeypatch):
+    from routers import monitor
+    monkeypatch.setattr(monitor, '_in_container', lambda: False)
     hosts = api.get('/api/monitor/hosts').json()['hosts']
     assert hosts[0] == {'id': 'local', 'label': '本机', 'pinned': True}
     by_id = {h['id']: h for h in hosts}
@@ -157,3 +159,40 @@ def test_unicode_digit_target_and_odd_interface_names_do_not_500(api, remote):
                                  {'name': 'eth0', 'received_bytes': 1, 'sent_bytes': 1, 'ifindex': None}]
     queue.append(odd)
     assert api.get('/api/monitor/stats', params={'target': 'server:71'}).status_code == 200
+
+
+def test_local_disk_skips_bind_mounted_files_and_keeps_root(monkeypatch, tmp_path):
+    from collections import namedtuple
+    from routers import monitor
+    Part = namedtuple('Part', 'device mountpoint')
+    Usage = namedtuple('Usage', 'total used free percent')
+    data = tmp_path / 'data'; data.mkdir()
+    resolv = tmp_path / 'resolv.conf'; resolv.write_text('x')
+    parts = [Part('/dev/vdb1', str(resolv)), Part('/dev/vdb1', str(data)), Part('/dev/vdc1', str(tmp_path))]
+    monkeypatch.setattr(monitor.psutil, 'disk_partitions', lambda all=False: parts)
+    monkeypatch.setattr(monitor.psutil, 'disk_usage', lambda p: Usage(10 * 1024 ** 3, 5 * 1024 ** 3, 5 * 1024 ** 3, 50.0))
+    mounts = [d['mountpoint'] for d in monitor._get_disk()]
+    assert str(resolv) not in mounts
+    assert mounts.count(str(data)) == 1 and str(tmp_path) in mounts
+    assert mounts[0] == '/'
+
+
+def test_local_disk_in_container_reports_root_instead_of_files(monkeypatch, tmp_path):
+    from collections import namedtuple
+    from routers import monitor
+    Part = namedtuple('Part', 'device mountpoint')
+    Usage = namedtuple('Usage', 'total used free percent')
+    files = []
+    for name in ('resolv.conf', 'hostname', 'hosts'):
+        f = tmp_path / name; f.write_text('x'); files.append(Part('/dev/vdb1', str(f)))
+    monkeypatch.setattr(monitor.psutil, 'disk_partitions', lambda all=False: files)
+    monkeypatch.setattr(monitor.psutil, 'disk_usage', lambda p: Usage(10 * 1024 ** 3, 5 * 1024 ** 3, 5 * 1024 ** 3, 50.0))
+    assert [d['mountpoint'] for d in monitor._get_disk()] == ['/']
+
+
+def test_local_target_is_labelled_as_the_panel_container(api, monkeypatch):
+    from routers import monitor
+    monkeypatch.setattr(monitor, '_in_container', lambda: True)
+    local = api.get('/api/monitor/hosts').json()['hosts'][0]
+    assert local['id'] == 'local' and local['label'] == '面板容器'
+    assert 'Docker' in local['note']
