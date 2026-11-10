@@ -8,6 +8,8 @@ callbacks run from `poll()` *outside* the lock.
 from __future__ import annotations
 
 import os
+import re
+import select
 import signal
 import subprocess
 import sys
@@ -21,6 +23,8 @@ from .store import Store, StoreError
 
 TRUNCATION_MARKER = "[输出超过 10 MiB，已截断]"
 DEFAULT_OUTPUT_LIMIT = 10 * 1024 * 1024
+ABANDON_MARKER = "[作业结束后仍有后台进程占用输出，已停止收集]"
+_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _BASE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"}
 
 
@@ -38,6 +42,8 @@ class _Active:
         self.cancelled = False
         self.term_at: Optional[float] = None
         self.killed = False
+        self.kill_at: Optional[float] = None
+        self.abandon = False
         self.exited_at: Optional[float] = None
         self.reader_done = threading.Event()
         # written by the reader thread, read after reader_done is set
@@ -55,19 +61,26 @@ class _Retry:
         self.scheduled_for = scheduled_for
 
 
+class _EnvFileError(Exception):
+    pass
+
+
 def _parse_env_file(path: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
-    with open(path, "r", encoding="utf-8") as f:
-        for raw in f:
+    with open(path, "r", encoding="utf-8-sig") as f:
+        for n, raw in enumerate(f, 1):
             line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
+            if not line or line.startswith("#"):
                 continue
-            key, value = line.split("=", 1)
+            if line.startswith("export ") or line.startswith("export\t"):
+                line = line[7:].lstrip()
+            key, sep, value = line.partition("=")
             key, value = key.strip(), value.strip()
+            if not sep or not _KEY_RE.match(key):
+                raise _EnvFileError("环境变量文件第 %d 行格式不正确" % n)
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
                 value = value[1:-1]
-            if key:
-                out[key] = value
+            out[key] = value
     return out
 
 
@@ -106,17 +119,32 @@ class Runner:
 
     def _fail_start(self, job, trigger, scheduled_for, attempt, run_id, reason: str) -> None:
         text = ("无法启动：" + reason + "\n").encode("utf-8")
-        with open(self._path(run_id), "wb") as f:
-            f.write(text)
-        self._store.finish_run(run_id, "failed", None, len(text), False)
+        size = len(text)
+        try:
+            with open(self._path(run_id), "wb") as f:
+                f.write(text)
+        except OSError as e:
+            print("runner: cannot write output for run %s: %s" % (run_id, e), file=sys.stderr)
+            size = 0
+        self._store.finish_run(run_id, "failed", None, size, False)
         self._done.append((job, trigger, scheduled_for, attempt, run_id))
 
     def _reader(self, act: _Active, out) -> None:
         stream = act.proc.stdout
+        fd = stream.fileno()
         last = b"\n"
         try:
             while True:
-                chunk = os.read(stream.fileno(), 65536)
+                ready, _, _ = select.select([fd], [], [], 0.2)
+                if not ready:
+                    if act.abandon:
+                        tail = (b"" if last == b"\n" else b"\n") + \
+                            ABANDON_MARKER.encode("utf-8") + b"\n"
+                        out.write(tail)
+                        act.written += len(tail)
+                        break
+                    continue
+                chunk = os.read(fd, 65536)
                 if not chunk:
                     break
                 if act.truncated:
@@ -166,9 +194,18 @@ class Runner:
                 return run_id
             try:
                 env = self._build_env(job)
+            except _EnvFileError as e:
+                self._fail_start(job, trigger, scheduled_for, attempt, run_id, str(e))
+                return run_id
             except (OSError, UnicodeDecodeError, ValueError):
                 self._fail_start(job, trigger, scheduled_for, attempt, run_id,
                                  "无法读取环境变量文件 %s" % job.get("env_file"))
+                return run_id
+            try:
+                out = open(self._path(run_id), "wb", buffering=0)
+            except OSError as e:
+                self._fail_start(job, trigger, scheduled_for, attempt, run_id,
+                                 "无法创建输出文件（%s）" % (e.strerror or type(e).__name__))
                 return run_id
             try:
                 proc = subprocess.Popen(job["command"], cwd=workdir, env=env,
@@ -176,23 +213,34 @@ class Runner:
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         bufsize=0)
             except FileNotFoundError:
+                out.close()
                 self._fail_start(job, trigger, scheduled_for, attempt, run_id,
                                  "找不到命令 %s" % job["command"][0])
                 return run_id
             except PermissionError:
+                out.close()
                 self._fail_start(job, trigger, scheduled_for, attempt, run_id,
                                  "没有权限执行 %s" % job["command"][0])
                 return run_id
             except (OSError, ValueError) as e:
+                out.close()
                 self._fail_start(job, trigger, scheduled_for, attempt, run_id,
                                  "%s" % (getattr(e, "strerror", None) or type(e).__name__))
                 return run_id
             act = _Active(job, trigger, scheduled_for, attempt, run_id, proc,
                           self._clock.monotonic())
-            out = open(self._path(run_id), "wb", buffering=0)
+            try:
+                threading.Thread(target=self._reader, args=(act, out), daemon=True,
+                                 name="runner-out-%d" % run_id).start()
+            except Exception as e:
+                self._signal_group(act, signal.SIGKILL)
+                proc.wait()
+                proc.stdout.close()
+                out.close()
+                self._fail_start(job, trigger, scheduled_for, attempt, run_id,
+                                 "无法启动输出线程（%s）" % type(e).__name__)
+                return run_id
             self._active[run_id] = act
-            threading.Thread(target=self._reader, args=(act, out), daemon=True,
-                             name="runner-out-%d" % run_id).start()
             return run_id
 
     def cancel(self, run_id: int) -> bool:
@@ -218,49 +266,67 @@ class Runner:
         with self._lock:
             return len(self._active)
 
+    def _poll_active(self, act: _Active, now: float) -> bool:
+        """Advance one active attempt; return True when it was finalized."""
+        rc = act.proc.poll()
+        if rc is None:
+            if act.term_at is None and now >= act.deadline:
+                act.timed_out = True
+                act.term_at = now
+                self._signal_group(act, signal.SIGTERM)
+            elif act.term_at is not None and not act.killed \
+                    and now - act.term_at >= self._grace:
+                act.killed = True
+                act.kill_at = now
+                self._signal_group(act, signal.SIGKILL)
+            return False
+        if act.exited_at is None:
+            act.exited_at = now
+        if not act.reader_done.is_set():
+            # Something still holds the pipe open (grandchild). Kill the group after
+            # the grace, then stop waiting for EOF after another grace.
+            if not act.killed:
+                if now - act.exited_at >= self._grace:
+                    act.killed = True
+                    act.kill_at = now
+                    self._signal_group(act, signal.SIGKILL)
+            elif now - (act.kill_at or now) >= self._grace:
+                act.abandon = True
+            return False
+        self._finalize(act, rc)
+        return True
+
     def poll(self) -> None:
         callbacks: List[Any] = []
         with self._lock:
             now = self._clock.monotonic()
             for run_id, act in list(self._active.items()):
-                rc = act.proc.poll()
-                if rc is None:
-                    if act.term_at is None and now >= act.deadline:
-                        act.timed_out = True
-                        act.term_at = now
-                        self._signal_group(act, signal.SIGTERM)
-                    elif act.term_at is not None and not act.killed \
-                            and now - act.term_at >= self._grace:
-                        act.killed = True
-                        self._signal_group(act, signal.SIGKILL)
-                    continue
-                if act.exited_at is None:
-                    act.exited_at = now
-                if not act.reader_done.is_set():
-                    # a leftover grandchild may hold the pipe open; reap the group
-                    if not act.killed and now - act.exited_at >= self._grace:
-                        act.killed = True
-                        self._signal_group(act, signal.SIGKILL)
-                    continue
-                self._finalize(act, rc)
-                del self._active[run_id]
+                try:
+                    if self._poll_active(act, now):
+                        del self._active[run_id]
+                except Exception as e:
+                    print("runner: polling run %s failed: %r" % (run_id, e), file=sys.stderr)
             # drain finished attempts: decide retry vs final report
             done, self._done = self._done, []
             for job, trigger, scheduled_for, attempt, run_id in done:
-                run = self._store.get_run(run_id)
-                if run is not None and run["status"] == "failed" and attempt <= int(job["retries"]):
-                    self._retries.append(_Retry(
-                        job, attempt + 1, now + float(job["retry_delay_seconds"]),
-                        trigger, scheduled_for))
-                else:
-                    callbacks.append((job, run))
+                try:
+                    run = self._store.get_run(run_id)
+                    if run is not None and run["status"] in ("failed", "timed_out") \
+                            and attempt <= int(job["retries"]):
+                        self._retries.append(_Retry(
+                            job, attempt + 1, now + float(job["retry_delay_seconds"]),
+                            trigger, scheduled_for))
+                    else:
+                        callbacks.append((job, run))
+                except Exception as e:
+                    print("runner: finishing run %s failed: %r" % (run_id, e), file=sys.stderr)
             due = [r for r in self._retries if r.due <= now]
             self._retries = [r for r in self._retries if r.due > now]
             for r in due:
                 try:
                     self.start(r.job, "retry", r.scheduled_for, r.attempt)
-                except StoreError as e:  # e.g. job deleted meanwhile; give up on the chain
-                    print("runner: retry of %s abandoned: %s" % (r.job["id"], e), file=sys.stderr)
+                except Exception as e:  # e.g. job deleted meanwhile; give up on this chain
+                    print("runner: retry of %s abandoned: %r" % (r.job["id"], e), file=sys.stderr)
         for job, run in callbacks:
             try:
                 self._on_finish(job, run)

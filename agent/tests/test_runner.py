@@ -110,8 +110,10 @@ def test_timeout_escalates_to_sigkill_after_grace(env):
     r = env.runner(kill_grace_seconds=30)
     rid = r.start(env.job(["/bin/sh", "-c", "trap '' TERM; echo ready; while :; do sleep 0.1; done"],
                           timeout_seconds=10), "manual", None)
-    while "ready" not in env.text(rid):
+    end = time.time() + 5
+    while "ready" not in env.text(rid) and time.time() < end:
         time.sleep(0.02)
+    assert "ready" in env.text(rid)
     env.clock.advance(11)
     r.poll()
     time.sleep(0.3)
@@ -274,7 +276,7 @@ def test_on_finish_exception_does_not_break_poll(env, capsys):
     def boom(job, run):
         raise RuntimeError("boom")
     r = Runner(env.store, env.secrets, env.clock, env.out, boom)
-    rid = r.start(env.job(["/bin/true"]), "manual", None)
+    rid = r.start(env.job(py("pass")), "manual", None)
     env.wait(r, rid)
     r.poll()
     assert "boom" in capsys.readouterr().err
@@ -286,3 +288,92 @@ def test_delete_output(env):
     env.wait(r, rid)
     r.delete_output([rid, 424242])
     assert not os.path.exists(os.path.join(env.out, "%d.log" % rid))
+
+
+def test_timed_out_is_retried_cancelled_is_not(env):
+    r = env.runner()
+    job = env.job(["/bin/sh", "-c", "sleep 60"], retries=1, retry_delay_seconds=5,
+                  timeout_seconds=10)
+    rid = r.start(job, "manual", None)
+    run = env.wait(r, rid, advance=11)
+    assert run["status"] == "timed_out" and env.finished == []
+    assert r.running_job_ids() == {"j"}
+    env.clock.advance(5)
+    r.poll()
+    rid2 = env.store.list_runs("j")[0]["id"]
+    assert rid2 != rid and env.store.get_run(rid2)["attempt"] == 2
+    r.cancel(rid2)
+    env.wait(r, rid2)
+    assert len(env.finished) == 1 and env.finished[0][1]["status"] == "cancelled"
+
+
+def test_env_file_compat(env):
+    ef = env.tmp / "c.env"
+    ef.write_bytes("\ufeff# c\nexport A=1\nB=\"x y\"\nC='q'\nD=v # not comment\nE=\"mis'\n".encode("utf-8"))
+    r = env.runner()
+    code = "import os;print(*[os.environ[k] for k in 'ABCDE'],sep='|')"
+    rid = r.start(env.job(py(code), env_file=str(ef)), "manual", None)
+    env.wait(r, rid)
+    assert env.text(rid).strip() == "1|x y|q|v # not comment|\"mis'"
+
+
+def test_bad_env_file_line_names_number_not_value(env):
+    ef = env.tmp / "bad.env"
+    ef.write_text("A=1\n1BAD=topsecretvalue\n")
+    r = env.runner()
+    rid = r.start(env.job(["/bin/true"], env_file=str(ef)), "manual", None)
+    run = env.store.get_run(rid)
+    assert run["status"] == "failed"
+    assert "第 2 行" in env.text(rid) and "topsecretvalue" not in env.text(rid)
+    ef.write_text("NOEQUALS\n")
+    rid = r.start(env.job(["/bin/true"], env_file=str(ef)), "manual", None)
+    assert "第 1 行" in env.text(rid)
+
+
+def test_orphan_holding_pipe_does_not_block_finish(env):
+    r = env.runner(kill_grace_seconds=5)
+    code = ("import os,time\nif os.fork()==0:\n os.setsid(); time.sleep(20); os._exit(0)\n"
+            "print('main done', flush=True)")
+    rid = r.start(env.job(py(code)), "manual", None)
+    try:
+        run = env.wait(r, rid, advance=3, timeout=8)
+    finally:
+        pass
+    assert run["status"] == "succeeded"
+    assert "main done" in env.text(rid)
+    assert env.text(rid).rstrip().endswith("[作业结束后仍有后台进程占用输出，已停止收集]")
+    assert r.running_job_ids() == set()
+
+
+def test_unwritable_output_dir_gives_failed_run(env):
+    r = env.runner()
+    os.rmdir(env.out)
+    open(env.out, "w").close()  # a file where the directory should be
+    rid = r.start(env.job(py("pass")), "manual", None)
+    run = env.store.get_run(rid)
+    assert run["status"] == "failed" and run["exit_code"] is None
+    assert r.active_count() == 0
+    r.poll()
+    assert len(env.finished) == 1
+
+
+def test_one_raising_entry_does_not_stop_others(env, capsys):
+    r = env.runner()
+    a = r.start(env.job(py("pass")), "manual", None)
+    b = r.start(env.job(py("pass")), "manual", None)
+    time.sleep(0.3)
+    real = env.store.get_run
+
+    def flaky(run_id):
+        if run_id == a:
+            raise RuntimeError("db hiccup")
+        return real(run_id)
+    env.store.get_run = flaky
+    r.poll()
+    time.sleep(0.1)
+    r.poll()
+    env.store.get_run = real
+    assert real(b)["status"] == "succeeded"
+    assert "db hiccup" in capsys.readouterr().err
+    r.poll()
+    assert real(a)["status"] == "succeeded"
