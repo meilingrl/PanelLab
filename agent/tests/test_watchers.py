@@ -270,3 +270,32 @@ def test_cpu_trigger_85_does_not_flap_at_85():
     w.sample(79, cfg)
     clock.advance(60)
     assert w.sample(79, cfg) is False
+
+
+# ---- I4: restored firing state and vanished mounts
+
+def test_disk_restored_firing_recovers_when_low():
+    state = {"used": 50}
+    w = DiskWatch(lambda: "/dev/sda1 /data ext4 rw 0 0\n", lambda p: vfs(100, 100 - state["used"]))
+    w.restore_firing("/data")
+    r = w.check({})
+    assert [(x[0], x[1]) for x in r] == [("disk:/data", False)]
+
+
+def test_disk_vanished_mount_recovers():
+    mounts = {"text": "/dev/sda1 /data ext4 rw 0 0\n/dev/sdb1 /backup ext4 rw 0 0\n"}
+    w = DiskWatch(lambda: mounts["text"], lambda p: vfs(100, 1))
+    assert sorted(x[0] for x in w.check({}) if x[1]) == ["disk:/backup", "disk:/data"]
+    mounts["text"] = "/dev/sda1 /data ext4 rw 0 0\n"
+    r = w.check({})
+    assert [(x[0], x[1]) for x in r] == [("disk:/backup", False)]
+    assert "/backup" in r[0][2]
+    assert w.check({}) == []
+
+
+def test_disk_empty_mount_list_keeps_firing_state():
+    mounts = {"text": "/dev/sda1 /data ext4 rw 0 0\n"}
+    w = DiskWatch(lambda: mounts["text"], lambda p: vfs(100, 1))
+    w.check({})
+    mounts["text"] = ""  # unreadable /proc/self/mounts, not an unmount
+    assert w.check({}) == []

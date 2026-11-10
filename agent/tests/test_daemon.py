@@ -565,3 +565,25 @@ def test_ctl_undrain(rig, short_dir, monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ------------------------------------------------- I4: firing state after restart
+
+def test_startup_seeds_resource_watches_from_firing_alerts(rig):
+    s = rig.store()
+    for key in ("cpu", "mem", "disk:/data", "disk:/gone", "job:x"):
+        s.put_alert(key, "firing", T0.isoformat(), T0.isoformat(), key)
+    s.close()
+    readers = quiet_readers(mounts=lambda: "/dev/sda1 /data ext4 rw 0 0\n",
+                            statvfs=lambda p: SimpleNamespace(f_blocks=100, f_bavail=90),
+                            meminfo=lambda: "MemTotal: 100 kB\nMemAvailable: 90 kB\n")
+    a = rig.agent(readers=readers)
+    assert a.cpu_watch.firing is True and a.mem_watch.firing is True
+    a.tick()
+    assert a.store.get_alert("disk:/data")["state"] == "ok"
+    assert a.store.get_alert("disk:/gone")["state"] == "ok"
+    for _ in range(11):  # memory at 10% for 5 minutes recovers
+        rig.clock.advance(30)
+        a.tick()
+    assert a.store.get_alert("mem")["state"] == "ok"
+    assert a.store.get_alert("cpu")["state"] == "firing"  # no CPU samples yet

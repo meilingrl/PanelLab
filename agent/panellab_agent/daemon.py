@@ -345,6 +345,7 @@ class Agent:
         hb_kw = {"opener": r["opener"]} if r.get("opener") else {}
         self.heartbeat = Heartbeat(lambda: self.alert_config().get("heartbeat_url"),
                                    self.clock, **hb_kw)
+        self._seed_watches()
         self._cpu_prev: Optional[str] = None
         self._last_phase: Dict[str, float] = {}
         self._pruned_at: Dict[str, float] = {}
@@ -377,6 +378,17 @@ class Agent:
         return bool(smtp.get("host") and smtp.get("to"))
 
     # ---- startup recovery ---------------------------------------------------
+
+    def _seed_watches(self) -> None:
+        """Resume resource alerts that were firing before a restart, so they can recover."""
+        for alert in self.store.firing_alerts():
+            key = alert["key"]
+            if key == "cpu":
+                self.cpu_watch.firing = True
+            elif key == "mem":
+                self.mem_watch.firing = True
+            elif key.startswith("disk:"):
+                self.disk_watch.restore_firing(key[len("disk:"):])
 
     def _recover(self) -> None:
         now = self.clock.now()

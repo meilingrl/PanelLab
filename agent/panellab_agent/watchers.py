@@ -79,6 +79,10 @@ class DiskWatch:
         self._statvfs = statvfs
         self._firing: Dict[str, bool] = {}
 
+    def restore_firing(self, path: str) -> None:
+        """Seed the firing state of a mount from the persisted alert (startup)."""
+        self._firing[path] = True
+
     def _mounts(self) -> List[str]:
         by_dev: Dict[str, str] = {}
         for line in self._read_mounts().splitlines():
@@ -97,7 +101,14 @@ class DiskWatch:
         high = float(_cfg(cfg, "disk_percent"))
         low = effective_recover(cfg, "disk_percent")
         out = []
-        for path in self._mounts():
+        mounts = self._mounts()
+        if mounts:  # an empty list means the mount table was unreadable
+            for path in sorted(p for p, firing in self._firing.items()
+                               if firing and p not in mounts):
+                self._firing[path] = False
+                out.append(("disk:" + path, False, "磁盘挂载点已消失：%s" % path,
+                            "挂载点 %s 已不在挂载列表中，不再检查它的空间。" % path))
+        for path in mounts:
             try:
                 st = self._statvfs(path)
             except OSError:
