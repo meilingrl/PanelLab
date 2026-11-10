@@ -232,7 +232,7 @@ def op_jobs_preview(agent, args):
         runs = _next_runs(schedule, agent.clock.now(), 3)
         zone = ZoneInfo(schedule["tz"]) if exprs else None
     except cron.CronError as exc:
-        raise _invalid("schedule: %s" % exc)
+        raise _invalid("计划无效：%s" % exc)
     if exprs and not runs:
         raise _invalid(NEVER_RUNS)
     return {"tz": schedule["tz"],

@@ -577,6 +577,12 @@ class Agent:
                          "这是一封来自 PanelLab Agent 的测试邮件。\n主机：%s\n时间（UTC）：%s\n"
                          % (self.hostname, now.isoformat()))
 
+    def heartbeat_status(self) -> Dict[str, Any]:
+        url = self.alert_config().get("heartbeat_url")
+        out = {"configured": bool(url and str(url).startswith("https://"))}
+        out.update(self.heartbeat.last_result())  # at, ok, error; never the URL
+        return out
+
     def status(self) -> Dict[str, Any]:
         return {
             "version": __version__,
@@ -592,6 +598,7 @@ class Agent:
             "firing": [{"key": a["key"], "since": a["since"], "message": a["message"]}
                        for a in self.store.firing_alerts()],
             "mail": self.mail_queue.last_result(),
+            "heartbeat": self.heartbeat_status(),
             "alerts_configured": self.alerts_configured(),
         }
 
@@ -647,37 +654,40 @@ class Agent:
             if key.startswith("job:") and key.endswith(":schedule") \
                     and key[4:-len(":schedule")] in by_id and key[4:-len(":schedule")] not in bad:
                 self.clear_schedule_alert(key[4:-len(":schedule")])
-        for jid, due in dec.missed:
-            job = by_id[jid]
-            self.store.record_missed(jid, due)
-            alert = job.get("alert") or DEFAULT_ALERT
-            self.alerts.observe("job:%s" % jid, True, "作业错过计划：%s" % job["name"],
-                                "作业：%s（%s）\n计划时间（UTC）：%s\n超出补跑窗口，未运行。"
-                                % (job["name"], jid, due.isoformat()),
-                                notify_firing=bool(alert.get("on_failure")))
-        for jid, due in dec.skipped_overlap:
-            self.store.record_skipped(jid, due)
-        for start in dec.start:
-            job = by_id[start.job_id]
-            try:
-                with self._lock:
-                    if self._draining or self._stopping:
-                        break
+        # Hold the lock for the rest of the tick so a drain cannot begin halfway:
+        # the tick's decisions are applied as a whole or (when draining) not at all,
+        # and last_scheduled only advances past due times that were handled.
+        with self._lock:
+            if self._draining or self._stopping:
+                return  # last_scheduled stays put; these come due again after undrain
+            for jid, due in dec.missed:
+                job = by_id[jid]
+                self.store.record_missed(jid, due)
+                alert = job.get("alert") or DEFAULT_ALERT
+                self.alerts.observe("job:%s" % jid, True, "作业错过计划：%s" % job["name"],
+                                    "作业：%s（%s）\n计划时间（UTC）：%s\n超出补跑窗口，未运行。"
+                                    % (job["name"], jid, due.isoformat()),
+                                    notify_firing=bool(alert.get("on_failure")))
+            for jid, due in dec.skipped_overlap:
+                self.store.record_skipped(jid, due)
+            for start in dec.start:
+                job = by_id[start.job_id]
+                try:
                     if start.job_id in self.runner.running_job_ids():
                         self.store.record_skipped(start.job_id, start.scheduled_for)
                         continue
-                    if start.trigger == "catch_up":
+                    alert = job.get("alert") or DEFAULT_ALERT
+                    if start.trigger == "catch_up" and alert.get("on_failure"):
                         self.alerts.notify(
                             "补跑：%s 迟到 %d 分钟" % (job["name"], start.late_minutes),
                             "作业：%s（%s）\n计划时间（UTC）：%s\n迟到 %d 分钟后补跑。"
                             % (job["name"], job["id"], start.scheduled_for.isoformat(),
                                start.late_minutes))
                     self.runner.start(job, start.trigger, start.scheduled_for)
-            except Exception:
-                _log("could not start job %s:\n%s" % (start.job_id, traceback.format_exc()))
-        with self._lock:
+                except Exception:
+                    _log("could not start job %s:\n%s" % (start.job_id, traceback.format_exc()))
             self._last_tick = now
-        self.store.set_meta("last_scheduled", now.isoformat())
+            self.store.set_meta("last_scheduled", now.isoformat())
 
     def _poll_runner(self) -> None:
         if self.draining:

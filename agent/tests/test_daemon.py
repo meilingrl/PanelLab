@@ -619,3 +619,99 @@ def test_run_of_deleted_job_does_not_alert_for_recreated_job(rig, tmp_path):
     rig.wait_mail(a)
     assert not any("作业失败" in s for s in rig.mailer.subjects())
     assert (a.store.get_alert("job:j") or {}).get("state") != "firing"
+
+
+# ------------------------------------------------------------- minor fixes
+
+def test_m1_drain_arriving_during_start_loop_loses_no_due_time(rig, tmp_path):
+    a = rig.agent()
+    for jid in ("a1", "a2"):
+        ok(call(a, "jobs.create", job=job_def(tmp_path, id=jid, name=jid, command=["/bin/true"],
+                                              schedule={"cron": ["* * * * *"], "tz": "UTC"})))
+    real_start = a.runner.start
+    drainer = []
+
+    def start(job, trigger, scheduled_for, attempt=1):
+        if not drainer:  # a drain request arrives from the control socket mid-loop
+            t = threading.Thread(target=a.drain)
+            t.start()
+            t.join(0.2)
+            drainer.append(t)
+        return real_start(job, trigger, scheduled_for, attempt)
+    a.runner.start = start
+    rig.clock.advance(60)
+    a.tick()
+    drainer[0].join(5)
+    started = sorted(r["job_id"] for jid in ("a1", "a2") for r in a.store.list_runs(jid))
+    assert started == ["a1", "a2"]  # the tick was applied as a whole
+    assert a.store.get_meta("last_scheduled") == (T0 + timedelta(seconds=60)).isoformat()
+    assert a.draining
+
+
+def test_m1_drain_before_start_loop_does_not_advance(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/true"],
+                                          schedule={"cron": ["* * * * *"], "tz": "UTC"})))
+    real_plan = daemon.plan_tick
+
+    def plan(*args, **kw):
+        dec = real_plan(*args, **kw)
+        a.drain()  # drain lands after planning but before anything starts
+        return dec
+    daemon.plan_tick = plan
+    try:
+        rig.clock.advance(60)
+        a.tick()
+    finally:
+        daemon.plan_tick = real_plan
+    assert a.store.list_runs("j") == []
+    assert a.store.get_meta("last_scheduled") is None
+    ok(call(a, "undrain"))
+    rig.clock.advance(1)
+    a.tick()
+    assert [r["trigger"] for r in a.store.list_runs("j")] == ["schedule"]
+
+
+def test_m2_pause_with_failed_retry_pending_alerts(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/sh", "-c", "exit 1"],
+                                          retries=2, retry_delay_seconds=30)))
+    wait_run(a, ok(call(a, "jobs.run_now", id="j"))["run_id"])
+    rig.wait_mail(a)
+    assert rig.mailer.sent == []
+    ok(call(a, "jobs.pause", id="j"))
+    rig.wait_mail(a)
+    assert any("作业失败：J" in s for s in rig.mailer.subjects())
+
+
+def test_m5_catch_up_notice_respects_on_failure(rig, tmp_path):
+    rig.clock.advance(-3 * 3600)
+    s = rig.store()
+    s.create_job(job_def(tmp_path, schedule={"cron": ["30 11 * * *"], "tz": "UTC"},
+                         command=["/bin/true"],
+                         alert={"on_failure": False, "on_recovery": True, "include_output": True}))
+    s.set_meta("last_alive", (T0 - timedelta(minutes=50)).isoformat())
+    s.close()
+    rig.clock.advance(3 * 3600)
+    a = rig.agent()
+    a.tick()
+    runs = a.store.list_runs("j")
+    assert [r["trigger"] for r in runs] == ["catch_up"]
+    wait_run(a, runs[0]["id"])
+    rig.wait_mail(a)
+    assert not any("补跑" in s_ for s_ in rig.mailer.subjects())
+
+
+def test_m6_status_reports_heartbeat(rig):
+    a = rig.agent()
+    assert ok(call(a, "status"))["heartbeat"] == {"configured": False, "at": None, "ok": None,
+                                                  "error": None}
+
+    def boom(req, timeout):
+        raise OSError("down")
+    a.heartbeat._opener = boom
+    ok(call(a, "alerts.configure", heartbeat_url="https://hc.example.com/ping"))
+    a.heartbeat.tick()
+    hb = ok(call(a, "status"))["heartbeat"]
+    assert hb["configured"] is True and hb["ok"] is False and hb["at"] == T0.isoformat()
+    assert hb["error"] == "心跳请求失败" and "hc.example.com" not in json.dumps(hb)

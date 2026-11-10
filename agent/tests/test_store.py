@@ -237,7 +237,10 @@ def test_alerts_and_meta(store):
     store.put_alert("k", "firing", "2026-11-10T12:00:00+00:00", None, "boom")
     a = store.get_alert("k")
     assert a == {"key": "k", "state": "firing", "since": "2026-11-10T12:00:00+00:00",
-                 "last_sent_at": None, "message": "boom"}
+                 "last_sent_at": None, "message": "boom", "notified": 1}
+    store.put_alert("q", "firing", "2026-11-10T12:00:00+00:00", None, "quiet", notified=False)
+    assert store.get_alert("q")["notified"] == 0
+    store.put_alert("q", "ok", "2026-11-10T12:00:00+00:00", None, "quiet")
     store.put_alert("j", "ok", "2026-11-10T12:00:00+00:00", "2026-11-10T12:01:00+00:00", "fine")
     assert [x["key"] for x in store.firing_alerts()] == ["k"]
     store.put_alert("k", "ok", "2026-11-10T13:00:00+00:00", None, "")
@@ -348,3 +351,22 @@ def test_legacy_tombstone_is_renamed_on_open(tmp_path, clock):
     assert s.get_run(rid)["job_id"].startswith("backup~")
     assert s.list_runs("backup") == []
     s.close()
+
+
+# ---- M7: user-facing store messages are Chinese
+
+def test_store_messages_are_chinese(store):
+    store.create_job(make_job())
+    cases = [
+        (lambda: store.create_job(make_job()), "conflict", "作业 ID 已存在"),
+        (lambda: store.create_job(make_job(id="Bad ID")), "invalid", "作业 ID"),
+        (lambda: store.create_job(make_job(id="x", workdir="rel")), "invalid", "工作目录"),
+        (lambda: store.update_job("backup", {"name": "n"}, 9), "conflict", "作业已被修改"),
+        (lambda: store.update_job("nope", {}, 1), "not_found", "作业不存在"),
+        (lambda: store.create_job(make_job(id="y", timeout_seconds=0)), "invalid", "timeout_seconds"),
+    ]
+    for fn, code, text in cases:
+        with pytest.raises(StoreError) as e:
+            fn()
+        assert e.value.code == code and text in e.value.message, e.value.message
+        assert not any(w in e.value.message for w in ("must", "no such", "already exists"))

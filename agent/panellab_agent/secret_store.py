@@ -33,8 +33,10 @@ class Secrets:
                 data = json.load(f)
         except FileNotFoundError:
             return {}
-        if not isinstance(data, dict):
-            raise StoreError("invalid", "secrets file is corrupt")
+        except (ValueError, UnicodeDecodeError):
+            data = None  # never quote the parser error: it may echo file content
+        if not isinstance(data, dict) or not isinstance(data.get("jobs", {}), dict):
+            raise StoreError("invalid", "秘密文件已损坏")
         return data
 
     def _save(self, data: Dict[str, Any]) -> None:
@@ -58,9 +60,9 @@ class Secrets:
         """Value None deletes a name; names absent from `changes` stay as they are."""
         for k, v in changes.items():
             if not isinstance(k, str) or not _NAME_RE.fullmatch(k):
-                raise StoreError("invalid", "bad secret name: %r" % (k,))
+                raise StoreError("invalid", "秘密变量名称不合法：%r" % (k,))
             if v is not None and not isinstance(v, str):
-                raise StoreError("invalid", "secret values must be strings")
+                raise StoreError("invalid", "秘密变量的值必须是字符串")
         with self._lock:
             data = self._load()
             jobs = data.setdefault("jobs", {})
@@ -81,7 +83,11 @@ class Secrets:
 
     def job_env(self, job_id: str) -> Dict[str, str]:
         with self._lock:
-            return dict(self._load().get("jobs", {}).get(job_id, {}))
+            env = self._load().get("jobs", {}).get(job_id, {})
+        if not isinstance(env, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+            raise StoreError("invalid", "秘密文件已损坏")
+        return dict(env)
 
     def set_smtp_password(self, value: Optional[str]) -> None:
         with self._lock:

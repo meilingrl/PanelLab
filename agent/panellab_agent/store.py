@@ -56,7 +56,7 @@ def _is_int(v: Any) -> bool:
 
 def _iso(dt: datetime) -> str:
     if dt.tzinfo is None:
-        raise _invalid("naive datetime")
+        raise _invalid("时间缺少时区")
     return dt.astimezone(timezone.utc).isoformat()
 
 
@@ -66,50 +66,50 @@ def _parse_iso(text: str) -> datetime:
 
 def _validate_definition(job: Dict[str, Any]) -> None:
     if not isinstance(job.get("id"), str) or not ID_RE.fullmatch(job["id"]):
-        raise _invalid("id must match ^[a-z0-9][a-z0-9-]{0,47}$")
+        raise _invalid("作业 ID 只能使用小写字母、数字和连字符，以字母或数字开头，最长 48 个字符")
     name = job.get("name")
     if not isinstance(name, str) or not name or len(name) > 100 or _CONTROL_RE.search(name):
-        raise _invalid("name must be 1-100 characters without control characters")
+        raise _invalid("名称必须是 1-100 个字符，且不能含控制字符")
     cmd = job.get("command")
     if (not isinstance(cmd, list) or not cmd
             or not all(isinstance(a, str) and "\0" not in a for a in cmd) or not cmd[0]):
-        raise _invalid("command must be a non-empty list of strings without NUL, first non-empty")
+        raise _invalid("命令必须是非空的字符串列表，第一项不能为空，且不能含 NUL")
     wd = job.get("workdir")
     if not isinstance(wd, str) or not wd.startswith("/") or "\0" in wd:
-        raise _invalid("workdir must be an absolute path")
+        raise _invalid("工作目录必须是绝对路径")
     env = job.get("env")
     if (not isinstance(env, dict)
             or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items())):
-        raise _invalid("env must be a map of strings")
+        raise _invalid("环境变量必须是字符串到字符串的映射")
     ef = job.get("env_file")
     if ef is not None and not isinstance(ef, str):
-        raise _invalid("env_file must be a string or null")
+        raise _invalid("环境变量文件必须是字符串或 null")
     sched = job.get("schedule")
     if (not isinstance(sched, dict) or set(sched) != {"cron", "tz"}
             or not isinstance(sched["cron"], list)
             or not all(isinstance(c, str) for c in sched["cron"])
             or not isinstance(sched["tz"], str)):
-        raise _invalid('schedule must be {"cron": [str, ...], "tz": str}')
+        raise _invalid('计划必须是 {"cron": [字符串, ...], "tz": 字符串}')
     try:
         for c in sched["cron"]:
             parse(c)
         validate_tz(sched["tz"])
     except CronError as exc:
-        raise _invalid("schedule: %s" % exc)
+        raise _invalid("计划无效：%s" % exc)
     for field, (lo, hi) in _INT_BOUNDS.items():
         v = job.get(field)
         if not _is_int(v) or not lo <= v <= hi:
-            raise _invalid("%s must be an integer in %d-%d" % (field, lo, hi))
+            raise _invalid("%s 必须是 %d-%d 的整数" % (field, lo, hi))
     if not isinstance(job.get("paused"), bool):
-        raise _invalid("paused must be a boolean")
+        raise _invalid("paused 必须是布尔值")
     alert = job.get("alert")
     if (not isinstance(alert, dict) or set(alert) != set(DEFAULT_ALERT)
             or not all(isinstance(v, bool) for v in alert.values())):
-        raise _invalid("alert must be {on_failure, on_recovery, include_output: bool}")
+        raise _invalid("告警设置必须包含 on_failure、on_recovery、include_output 三个布尔值")
     for field in ("settings_file",):
         v = job.get(field)
         if v is not None and not isinstance(v, str):
-            raise _invalid("%s must be a string or null" % field)
+            raise _invalid("%s 必须是字符串或 null" % field)
 
 
 def _fill_defaults(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -183,6 +183,10 @@ class Store:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(_SCHEMA)
             # Tombstones from before ids were freed on delete keep the bare id.
+            cols = [r["name"] for r in self._db.execute("PRAGMA table_info(alerts)")]
+            if "notified" not in cols:
+                # 1 when the firing mail went out, so a recovery mail is due.
+                self._db.execute("ALTER TABLE alerts ADD COLUMN notified INTEGER NOT NULL DEFAULT 1")
             for row in self._db.execute(
                     "SELECT id FROM jobs WHERE deleted = 1 AND instr(id, '~') = 0").fetchall():
                 self._rename_tombstone(row["id"])
@@ -216,16 +220,16 @@ class Store:
 
     def create_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(job, dict):
-            raise _invalid("job must be an object")
+            raise _invalid("作业必须是对象")
         extra = set(job) - set(_DATA_FIELDS) - {"id", "paused"}
         if extra:
-            raise _invalid("unknown fields: %s" % ", ".join(sorted(extra)))
+            raise _invalid("未知字段：%s" % ", ".join(sorted(extra)))
         full = _fill_defaults(job)
         _validate_definition(full)
         now = self._now()
         with self._lock:
             if self._fetch_job(full["id"], include_deleted=True) is not None:
-                raise StoreError("conflict", "job id already exists: %s" % full["id"])
+                raise StoreError("conflict", "作业 ID 已存在：%s" % full["id"])
             self._db.execute(
                 "INSERT INTO jobs (id, revision, created_at, updated_at, paused, data) "
                 "VALUES (?, 1, ?, ?, ?, ?)",
@@ -234,16 +238,16 @@ class Store:
 
     def update_job(self, job_id: str, changes: Dict[str, Any], revision: int) -> Dict[str, Any]:
         if not isinstance(changes, dict):
-            raise _invalid("changes must be an object")
+            raise _invalid("修改内容必须是对象")
         bad = set(changes) - set(_DATA_FIELDS) - {"paused"}
         if bad:
-            raise _invalid("cannot change or unknown fields: %s" % ", ".join(sorted(bad)))
+            raise _invalid("不能修改或未知的字段：%s" % ", ".join(sorted(bad)))
         with self._lock:
             row = self._fetch_job(job_id)
             if row is None:
-                raise StoreError("not_found", "no such job: %s" % job_id)
+                raise StoreError("not_found", "作业不存在：%s" % job_id)
             if row["revision"] != revision:
-                raise StoreError("conflict", "job revision is %d, not %s" % (row["revision"], revision))
+                raise StoreError("conflict", "作业已被修改（当前版本 %d，提交的版本 %s），请刷新后重试" % (row["revision"], revision))
             merged = self._job_dict(row)
             merged.update(changes)
             _validate_definition(merged)
@@ -279,7 +283,7 @@ class Store:
     def delete_job(self, job_id: str) -> None:
         with self._lock:
             if self._fetch_job(job_id) is None:
-                raise StoreError("not_found", "no such job: %s" % job_id)
+                raise StoreError("not_found", "作业不存在：%s" % job_id)
             self._rename_tombstone(job_id)
 
     def deleted_job_ids(self) -> List[str]:
@@ -300,11 +304,11 @@ class Store:
 
     def set_paused(self, job_id: str, paused: bool) -> None:
         if not isinstance(paused, bool):
-            raise _invalid("paused must be a boolean")
+            raise _invalid("paused 必须是布尔值")
         with self._lock:
             row = self._fetch_job(job_id)
             if row is None:
-                raise StoreError("not_found", "no such job: %s" % job_id)
+                raise StoreError("not_found", "作业不存在：%s" % job_id)
             if bool(row["paused"]) == paused:
                 return
             now = self._now()
@@ -316,10 +320,10 @@ class Store:
     def insert_run(self, job_id: str, trigger: str, scheduled_for: Optional[datetime],
                    attempt: int) -> int:
         if trigger not in TRIGGERS:
-            raise _invalid("unknown trigger: %r" % (trigger,))
+            raise _invalid("未知的触发方式：%r" % (trigger,))
         with self._lock:
             if self._fetch_job(job_id) is None:
-                raise StoreError("not_found", "no such job: %s" % job_id)
+                raise StoreError("not_found", "作业不存在：%s" % job_id)
             cur = self._db.execute(
                 "INSERT INTO runs (job_id, trigger, status, scheduled_for, attempt, started_at) "
                 "VALUES (?, ?, 'running', ?, ?, ?)",
@@ -330,14 +334,14 @@ class Store:
     def finish_run(self, run_id: int, status: str, exit_code: Optional[int],
                    output_bytes: int, truncated: bool) -> None:
         if status not in RUN_STATUSES or status == "running":
-            raise _invalid("unknown final status: %r" % (status,))
+            raise _invalid("未知的结束状态：%r" % (status,))
         with self._lock:
             cur = self._db.execute(
                 "UPDATE runs SET status = ?, exit_code = ?, output_bytes = ?, truncated = ?, "
                 "finished_at = ? WHERE id = ?",
                 (status, exit_code, output_bytes, int(truncated), self._now(), run_id))
             if cur.rowcount == 0:
-                raise StoreError("not_found", "no such run: %s" % run_id)
+                raise StoreError("not_found", "运行不存在：%s" % run_id)
 
     def record_missed(self, job_id: str, scheduled_for: datetime) -> int:
         now = self._now()
@@ -417,13 +421,15 @@ class Store:
             return None if row is None else dict(row)
 
     def put_alert(self, key: str, state: str, since: str, last_sent_at: Optional[str],
-                  message: str) -> None:
+                  message: str, notified: bool = True) -> None:
         with self._lock:
             self._db.execute(
-                "INSERT INTO alerts (key, state, since, last_sent_at, message) VALUES (?,?,?,?,?) "
+                "INSERT INTO alerts (key, state, since, last_sent_at, message, notified) "
+                "VALUES (?,?,?,?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET state=excluded.state, since=excluded.since, "
-                "last_sent_at=excluded.last_sent_at, message=excluded.message",
-                (key, state, since, last_sent_at, message))
+                "last_sent_at=excluded.last_sent_at, message=excluded.message, "
+                "notified=excluded.notified",
+                (key, state, since, last_sent_at, message, int(notified)))
 
     def firing_alerts(self) -> List[Dict[str, Any]]:
         with self._lock:

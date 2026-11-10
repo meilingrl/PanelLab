@@ -335,3 +335,32 @@ def test_invalid_config_shapes_are_mail_errors(tmp_path, server):
     assert ei.value.code == "not_configured" and ei.value.__context__ is None
     assert m.last_result()["error"] == "告警邮件配置无效"
     e.book.observe("k", True, "s", "b")  # still no exception via AlertBook
+
+
+# ---- M4: no recovery mail when no firing mail went out
+
+def test_recovery_only_after_a_sent_firing_mail(tmp_path):
+    from panellab_agent.alerts import AlertBook
+    from panellab_agent.clock import FakeClock
+    from panellab_agent.store import Store
+    from datetime import datetime, timezone
+    clock = FakeClock(datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc))
+    store = Store(str(tmp_path / "a.db"), clock)
+    sent = []
+
+    class M:
+        def send(self, s, b):
+            sent.append(s)
+    book = AlertBook(store, clock, M(), "h")
+    book.observe("job:x", True, "作业失败：x", "", notify_firing=False)
+    book.observe("job:x", False, "作业恢复正常：x", "")
+    assert sent == []
+    book.observe("job:x", True, "作业失败：x", "")
+    book.observe("job:x", False, "作业恢复正常：x", "")
+    assert len(sent) == 2 and "已恢复" in sent[1]
+    # a quiet firing followed by a sent reminder does earn a recovery mail
+    book.observe("job:y", True, "y", "", notify_firing=False)
+    clock.advance(25 * 3600)
+    book.observe("job:y", True, "y", "")
+    book.observe("job:y", False, "y", "")
+    assert [s for s in sent if "y" in s][-1].endswith("已恢复：y")

@@ -441,3 +441,36 @@ def test_drop_retries_none_drops_all(env):
     job = env.job(["/bin/sh", "-c", "exit 1"], retries=1, retry_delay_seconds=5)
     env.wait(r, r.start(job, "manual", None))
     assert r.drop_retries() == 1 and r.running_job_ids() == set()
+
+
+# ---- M2: dropping a chain whose last attempt failed still reports it
+
+def test_dropped_retry_chain_reports_last_failed_run(env):
+    r = env.runner()
+    job = env.job(["/bin/sh", "-c", "exit 1"], retries=2, retry_delay_seconds=5)
+    rid = r.start(job, "manual", None)
+    env.wait(r, rid)
+    assert env.finished == []  # retry pending, nothing reported yet
+    assert r.drop_retries("j") == 1
+    assert len(env.finished) == 1
+    j, run = env.finished[0]
+    assert j["id"] == "j" and run["id"] == rid and run["status"] == "failed"
+
+
+# ---- M3: unreadable secrets fail the start instead of leaving a running row
+
+@pytest.mark.parametrize("content", [
+    '{"jobs": {"j": {"TOKEN": "s3cr3t-value"}',      # truncated JSON
+    '["s3cr3t-value"]',                              # not an object
+    '{"jobs": ["s3cr3t-value"]}',                    # jobs not an object
+])
+def test_corrupt_secrets_fail_start_without_phantom_running(env, content):
+    with open(str(env.tmp / "secrets.json"), "w") as f:
+        f.write(content)
+    r = env.runner()
+    rid = r.start(env.job(["/bin/true"]), "manual", None)
+    run = env.store.get_run(rid)
+    assert run["status"] == "failed"
+    assert env.store.running_runs() == []
+    text = env.text(rid)
+    assert "无法读取秘密环境变量" in text and "s3cr3t-value" not in text

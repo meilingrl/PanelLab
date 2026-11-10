@@ -184,14 +184,16 @@ class AlertBook:
             cur = self._store.get_alert(key)
             state = cur["state"] if cur else "ok"
             if firing and state != "firing":
-                self._store.put_alert(key, "firing", now_s, now_s, subject)
+                self._store.put_alert(key, "firing", now_s, now_s, subject,
+                                      notified=notify_firing)
                 if notify_firing:
                     self._send(subject, self._compose("告警触发：%s" % subject, now, body))
             elif firing:
                 last = cur.get("last_sent_at")
                 last_dt = datetime.fromisoformat(last) if last else None
                 if last_dt is None or now - last_dt >= REMINDER_INTERVAL:
-                    self._store.put_alert(key, "firing", cur["since"], now_s, subject)
+                    self._store.put_alert(key, "firing", cur["since"], now_s, subject,
+                                          notified=bool(cur.get("notified", 1)) or notify_firing)
                     if notify_firing:
                         since = cur["since"]
                         self._send("仍未恢复：" + subject, self._compose(
@@ -200,7 +202,8 @@ class AlertBook:
             elif state == "firing":
                 since = cur["since"]
                 self._store.put_alert(key, "ok", now_s, None, subject)
-                if notify_recovery:
+                # Recover by mail only what was announced by mail.
+                if notify_recovery and cur.get("notified", 1):
                     orig = cur.get("message") or subject
                     self._send("已恢复：" + orig, self._compose(
                         "告警已恢复：%s" % orig, now, body,

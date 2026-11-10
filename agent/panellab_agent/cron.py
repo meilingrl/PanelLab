@@ -34,25 +34,25 @@ def _parse_field(text: str, lo: int, hi: int, name: str) -> FrozenSet[int]:
         step = 1
         if slash:
             if not (step_s.isascii() and step_s.isdigit()) or int(step_s) < 1:
-                raise CronError("invalid step in %s field: %r" % (name, part))
+                raise CronError("%s字段的步长无效：%r" % (name, part))
             step = int(step_s)
         if base == "*":
             start, end = lo, hi
         else:
             a, dash, b = base.partition("-")
             if not (a.isascii() and a.isdigit()):
-                raise CronError("invalid value in %s field: %r" % (name, part))
+                raise CronError("%s字段的值无效：%r" % (name, part))
             start = int(a)
             if dash:
                 if not (b.isascii() and b.isdigit()):
-                    raise CronError("invalid range in %s field: %r" % (name, part))
+                    raise CronError("%s字段的范围无效：%r" % (name, part))
                 end = int(b)
             elif slash:
-                raise CronError("step needs * or a range in %s field: %r" % (name, part))
+                raise CronError("%s字段的步长需要配合 * 或范围：%r" % (name, part))
             else:
                 end = start
         if start < lo or end > hi or start > end:
-            raise CronError("out of range in %s field: %r" % (name, part))
+            raise CronError("%s字段的值超出范围：%r" % (name, part))
         values.update(range(start, end + 1, step))
     return frozenset(values)
 
@@ -60,14 +60,14 @@ def _parse_field(text: str, lo: int, hi: int, name: str) -> FrozenSet[int]:
 def parse(expr: str) -> CronSpec:
     fields = expr.split()
     if len(fields) != 5:
-        raise CronError("cron expression needs 5 fields, got %d" % len(fields))
+        raise CronError("cron 表达式需要 5 个字段，实际 %d 个" % len(fields))
     minute, hour, dom, month, dow = fields
-    dows = _parse_field(dow, 0, 7, "day-of-week")
+    dows = _parse_field(dow, 0, 7, "星期")
     return CronSpec(
-        minutes=_parse_field(minute, 0, 59, "minute"),
-        hours=_parse_field(hour, 0, 23, "hour"),
-        doms=_parse_field(dom, 1, 31, "day-of-month"),
-        months=_parse_field(month, 1, 12, "month"),
+        minutes=_parse_field(minute, 0, 59, "分钟"),
+        hours=_parse_field(hour, 0, 23, "小时"),
+        doms=_parse_field(dom, 1, 31, "日期"),
+        months=_parse_field(month, 1, 12, "月份"),
         dows=frozenset(d % 7 for d in dows),
         dom_star=dom.startswith("*"),
         dow_star=dow.startswith("*"),
@@ -82,7 +82,7 @@ def _zone(tz: str) -> ZoneInfo:
     try:
         return ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError, OSError, KeyError) as exc:
-        raise CronError("unknown time zone: %r" % (tz,)) from exc
+        raise CronError("未知的时区：%r" % (tz,)) from exc
 
 
 def _day_matches(spec: CronSpec, day) -> bool:

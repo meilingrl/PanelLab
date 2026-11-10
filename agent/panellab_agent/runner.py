@@ -54,15 +54,20 @@ class _Active:
 
 class _Retry:
     def __init__(self, job: Dict[str, Any], attempt: int, due: float, trigger: str,
-                 scheduled_for: Optional[datetime]) -> None:
+                 scheduled_for: Optional[datetime], last_run_id: int) -> None:
         self.job = job
         self.attempt = attempt
         self.due = due
         self.trigger = trigger
         self.scheduled_for = scheduled_for
+        self.last_run_id = last_run_id  # the failed attempt this retry follows
 
 
 class _EnvFileError(Exception):
+    pass
+
+
+class _SecretsError(Exception):
     pass
 
 
@@ -115,7 +120,11 @@ class Runner:
         if job.get("env_file"):
             env.update(_parse_env_file(job["env_file"]))
         env.update({str(k): str(v) for k, v in (job.get("env") or {}).items()})
-        env.update(self._secrets.job_env(job["id"]))
+        try:
+            secret_env = self._secrets.job_env(job["id"])
+        except Exception:
+            raise _SecretsError()  # no detail: it could carry secret values
+        env.update(secret_env)
         return env
 
     def _fail_start(self, job, trigger, scheduled_for, attempt, run_id, reason: str) -> None:
@@ -198,6 +207,10 @@ class Runner:
             except _EnvFileError as e:
                 self._fail_start(job, trigger, scheduled_for, attempt, run_id, str(e))
                 return run_id
+            except _SecretsError:
+                self._fail_start(job, trigger, scheduled_for, attempt, run_id,
+                                 "无法读取秘密环境变量")
+                return run_id
             except (OSError, UnicodeDecodeError, ValueError):
                 self._fail_start(job, trigger, scheduled_for, attempt, run_id,
                                  "无法读取环境变量文件 %s" % job.get("env_file"))
@@ -268,13 +281,24 @@ class Runner:
             return ids
 
     def drop_retries(self, job_id: Optional[str] = None) -> int:
-        """Forget pending retries for one job (or all jobs when None); return how many."""
+        """Forget pending retries for one job (or all jobs when None); return how many.
+
+        Each dropped chain ends with its last (failed) attempt, which is
+        reported through `on_finish` like any final result.
+        """
         with self._lock:
             keep = [r for r in self._retries
                     if job_id is not None and r.job["id"] != job_id]
-            dropped = len(self._retries) - len(keep)
+            dropped = [r for r in self._retries if r not in keep]
             self._retries = keep
-            return dropped
+        for r in dropped:
+            try:
+                run = self._store.get_run(r.last_run_id)
+                if run is not None:
+                    self._on_finish(r.job, run)
+            except Exception as e:
+                print("runner: on_finish failed for %s: %r" % (r.job.get("id"), e), file=sys.stderr)
+        return len(dropped)
 
     def active_count(self) -> int:
         with self._lock:
@@ -330,7 +354,7 @@ class Runner:
                             and attempt <= int(job["retries"]):
                         self._retries.append(_Retry(
                             job, attempt + 1, now + float(job["retry_delay_seconds"]),
-                            trigger, scheduled_for))
+                            trigger, scheduled_for, run_id))
                     else:
                         callbacks.append((job, run))
                 except Exception as e:
@@ -386,7 +410,7 @@ class Runner:
         with self._lock:
             run = self._store.get_run(run_id)
             if run is None:
-                raise StoreError("not_found", "no such run: %s" % run_id)
+                raise StoreError("not_found", "运行不存在：%s" % run_id)
             act = self._active.get(run_id)
             running = run["status"] == "running"
             truncated = bool(run["truncated"]) or (act is not None and act.truncated)
