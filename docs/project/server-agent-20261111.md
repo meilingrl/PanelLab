@@ -25,7 +25,7 @@
 在本机 Colima 上运行，容器只有 `panellab-agent-lab`（夹具）和 `panellab-agent-lab-mysql`（`--panel` 的隔离后端数据库），结束后均已删除；未使用用户自己的 PanelLab 实例或任何真实服务器。
 
 - `python3 scripts/verify_agent_lab.py`：54 项全部通过，结尾为 `agent lab: all checks passed`。覆盖 `install.sh` 真实安装、单元加固与重启属性、socket 与目录权限、组成员关系、非成员被拒、从恶意当前目录运行不导入其中代码、测试邮件、失败与恢复邮件、`kill -9` 后 systemd 重启并标记 `agent_lost`、升级时等待正在运行的作业、卸载与 `--purge`。
-- `.venv311/bin/python scripts/verify_agent_lab.py --panel`：25 项全部通过，结尾为 `agent panel lab: all checks passed`。隔离后端只监听本机随机端口，夹具 sshd 只发布到 `127.0.0.1` 随机端口。路径为：探测指纹并与容器内 `ssh-keygen -lf` 核对 → 信任 → 未安装时返回 `agent_not_installed` → 上传安装包 → 在容器内以 `admin` 运行返回的那一条 sudo 命令 → 状态正常 → 配置 SMTP → 新建带秘密环境变量的作业 → 立即运行并读取输出（以 `panellab` 运行，秘密已注入）→ 诱发失败并在 SMTP 接收器收到失败邮件 → 成功并收到恢复邮件 → 暂停与恢复 → 修改磁盘阈值 → 测试邮件。全程检查 `GET /alerts`、`GET /jobs/{id}` 的响应和后端日志中不出现 SMTP 密码或秘密环境变量的值。
+- `.venv311/bin/python scripts/verify_agent_lab.py --panel`：26 项全部通过，结尾为 `agent panel lab: all checks passed`。隔离后端只监听本机随机端口，夹具 sshd 只发布到 `127.0.0.1` 随机端口。路径为：探测指纹并与容器内 `ssh-keygen -lf` 核对 → 信任 → 未安装时返回 `agent_not_installed` → 上传安装包 → 在容器内以 `admin` 运行返回的那一条 sudo 命令 → 状态正常 → 配置 SMTP → 新建带秘密环境变量的作业 → 立即运行并读取输出（以 `panellab` 运行，秘密已注入）→ 诱发失败并在 SMTP 接收器收到失败邮件 → 成功并收到恢复邮件 → 暂停与恢复 → 修改磁盘阈值 → 测试邮件。全程检查 `GET /alerts`、`GET /jobs/{id}` 的响应和后端日志中不出现 SMTP 密码或秘密环境变量的值。
 - 隔离后端使用临时 MySQL 而不是 SQLite：`servers` 等表的 BIGINT 主键在 SQLite 中不会自增，这是已有模型的限制，与本轮无关。
 
 浏览器走查：待补充
