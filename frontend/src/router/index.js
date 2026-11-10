@@ -28,6 +28,11 @@ const routes = [
         component: () => import('../views/dashboard/Workspaces.vue'),
       },
       {
+        path: 'agent',
+        name: 'Agent',
+        component: () => import('../views/dashboard/Agent.vue'),
+      },
+      {
         path: 'monitor',
         name: 'Monitor',
         component: () => import('../views/dashboard/Monitor.vue'),
