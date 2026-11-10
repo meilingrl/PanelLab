@@ -103,7 +103,7 @@ def test_maps_exit_codes_127_3_4(monkeypatch):
 
 def test_maps_agent_errors_conflict_409_invalid_422(monkeypatch):
     for code, status in [('conflict', 409), ('invalid', 422), ('bad_request', 422), ('not_found', 404),
-                         ('draining', 503), ('internal', 502), ('protocol_mismatch', 409)]:
+                         ('draining', 503), ('internal', 502), ('protocol_mismatch', 503)]:
         install(monkeypatch, [Channel(stdout=err(code, '细节'))])
         with pytest.raises(HTTPException) as exc:
             agent_client.call(None, None, 1, 'status')
@@ -167,7 +167,9 @@ def test_upload_bundle_excludes_tests_and_quotes_path(monkeypatch):
     install(monkeypatch, [runner], sftp)
     result = agent_client.upload_bundle(None, None, 1)
     version = agent_client.agent_version()
-    d = '/home/runner/panellab-agent-' + version
+    import hashlib
+    digest = hashlib.sha256(agent_client.build_bundle()).hexdigest()[:12]
+    d = '/home/runner/panellab-agent-%s-%s' % (version, digest)
     assert result == {'path': d, 'command': 'sudo bash ' + shlex.quote(d + '/install.sh'), 'version': version}
     tar_path = d + '.tar'
     assert list(sftp.files) == [tar_path]
@@ -187,8 +189,8 @@ def test_upload_bundle_excludes_tests_and_quotes_path(monkeypatch):
             if m.isfile():
                 assert m.mode == (0o755 if m.name == 'install.sh' else 0o644)
     assert agent_client.build_bundle() == agent_client.build_bundle()
-    assert runner.command == ('mkdir -p %s && tar -xf %s -C %s && rm -f %s'
-                              % tuple(shlex.quote(p) for p in (d, tar_path, d, tar_path)))
+    assert runner.command == ('rm -rf %s && mkdir -p %s && tar -xf %s -C %s && rm -f %s'
+                              % tuple(shlex.quote(p) for p in (d, d, tar_path, d, tar_path)))
 
 
 def test_upload_bundle_quotes_hostile_home(monkeypatch):
@@ -197,7 +199,7 @@ def test_upload_bundle_quotes_hostile_home(monkeypatch):
     runner = Channel()
     install(monkeypatch, [runner], sftp)
     result = agent_client.upload_bundle(None, None, 1)
-    assert shlex.quote("/home/o'brien $(x)/panellab-agent-" + agent_client.agent_version()) in runner.command
+    assert shlex.quote(result['path']) in runner.command and result['path'].startswith("/home/o'brien $(x)/panellab-agent-")
     assert result['command'].startswith("sudo bash '")
 
 
@@ -211,3 +213,33 @@ def test_upload_bundle_extract_failure(monkeypatch):
 
 def test_version_parsed_not_imported():
     assert agent_client.agent_version() == '0.1.0'
+
+
+def test_different_blobs_get_different_directories(monkeypatch):
+    paths = []
+    for blob in (b'one', b'two'):
+        monkeypatch.setattr(agent_client, 'build_bundle', lambda b=blob: b)
+        install(monkeypatch, [Channel()], FakeSFTP())
+        paths.append(agent_client.upload_bundle(None, None, 1)['path'])
+    assert paths[0] != paths[1]
+
+
+def test_relative_home_rejected(monkeypatch):
+    sftp = FakeSFTP()
+    sftp.normalize = lambda p: 'relative'
+    install(monkeypatch, [Channel()], sftp)
+    with pytest.raises(HTTPException) as exc:
+        agent_client.upload_bundle(None, None, 1)
+    assert code_of(exc) == ('agent_install_failed', 502)
+
+
+def test_oversize_bundle_is_explicit_error(monkeypatch):
+    monkeypatch.setattr(agent_client, 'BUNDLE_LIMIT', 10)
+    with pytest.raises(HTTPException) as exc:
+        agent_client.build_bundle()
+    assert code_of(exc) == ('agent_bundle_too_large', 500)
+
+
+def test_tmp_exclusion_is_narrow():
+    assert agent_client._excluded(('tmprpb9_fib', 'x.py'))
+    assert not agent_client._excluded(('panellab_agent', 'tmp_utils.py'))

@@ -3,6 +3,7 @@
 Secrets pass through untouched: they are never logged, cached or put in error text,
 and raw stdout/stderr from the server never reaches an error message.
 """
+import hashlib
 import io
 import json
 import re
@@ -40,9 +41,7 @@ def _agent_error_status(code):
         return 404
     if code == 'internal':
         return 502
-    if code == 'protocol_mismatch':
-        return 409
-    return 503  # draining
+    return 503  # draining, protocol_mismatch: 409 is reserved for revision conflicts
 
 
 def _stderr_code(stderr):
@@ -111,6 +110,8 @@ def _parse(stdout):
             fail('agent_protocol', UNRECOGNIZED, 502)
         return body['result']
     error = body.get('error')
+    # An unknown code means the server speaks something we do not understand (a newer or
+    # broken Agent), so it is a bad gateway response, not a client error.
     if not isinstance(error, dict) or error.get('code') not in KNOWN_AGENT_ERRORS or not isinstance(error.get('message'), str):
         fail('agent_protocol', UNRECOGNIZED, 502)
     code = error['code']
@@ -143,8 +144,14 @@ def agent_version():
     return match.group(1)
 
 
+STRAY_DIR_RE = re.compile(r'^tmp[a-z0-9_]{6,}$')
+
+
 def _excluded(parts):
-    return any(p == '__pycache__' or p == 'tests' or p.startswith('tmp') or p.endswith('.pyc') for p in parts)
+    # Only top-level stray test directories are dropped; a module such as tmp_utils.py stays.
+    if STRAY_DIR_RE.fullmatch(parts[0]) and (AGENT_DIR / parts[0]).is_dir():
+        return True
+    return any(p in ('__pycache__', 'tests') or p.endswith('.pyc') for p in parts)
 
 
 def _bundle_files():
@@ -182,24 +189,31 @@ def build_bundle():
                 info.mode = 0o755 if name == 'install.sh' else 0o644
                 tar.addfile(info, io.BytesIO(data))
     blob = buffer.getvalue()
-    assert len(blob) < BUNDLE_LIMIT, 'agent bundle too large'
+    if len(blob) >= BUNDLE_LIMIT:
+        fail('agent_bundle_too_large', 'Agent 安装包过大', 500)
     return blob
 
 
 def upload_bundle(db, user, server_id):
     version = agent_version()
     blob = build_bundle()
+    digest = hashlib.sha256(blob).hexdigest()[:12]
     with open_remote(db, user, server_id) as client:
         try:
             with remote_deadline(client, CALL_TIMEOUT):
                 with client.open_sftp() as sftp:
                     sftp.get_channel().settimeout(CONNECT_TIMEOUT)
                     home = sftp.normalize('.')
-                    target = '%s/panellab-agent-%s' % (home.rstrip('/'), version)
+                    if not isinstance(home, str) or not home.startswith('/'):
+                        fail('agent_install_failed', '无法确定服务器上的主目录', 502)
+                    # Content-addressed: different bundle contents never share a directory.
+                    name = 'panellab-agent-%s-%s' % (version, digest)
+                    target = '%s/%s' % (home.rstrip('/'), name)
                     tar_path = target + '.tar'
                     sftp.putfo(io.BytesIO(blob), tar_path)
                 q = shlex.quote
-                command = 'mkdir -p %s && tar -xf %s -C %s && rm -f %s' % (q(target), q(tar_path), q(target), q(tar_path))
+                command = 'rm -rf %s && mkdir -p %s && tar -xf %s -C %s && rm -f %s' % (
+                    q(target), q(target), q(tar_path), q(target), q(tar_path))
                 status, _, _ = _run(client, command, None, CALL_TIMEOUT)
         except (paramiko.SSHException, OSError, EOFError):
             fail('agent_install_failed', '上传 Agent 安装包失败', 502)
