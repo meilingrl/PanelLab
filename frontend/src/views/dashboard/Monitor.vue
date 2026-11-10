@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
+import { warningTexts } from '../../composables/remoteWarnings'
 
 Chart.register(...registerables)
 
@@ -264,6 +265,7 @@ onUnmounted(() => {
       </select>
       <span class="subtitle">CPU、内存、磁盘与网络，每 5 秒刷新。远程服务器来自<router-link to="/workspaces">任务工作区</router-link>，经已确认的主机指纹连接。</span>
     </div>
+    <p v-if="hosts.find(h => h.id === currentTarget)?.note" class="muted" data-testid="target-note">{{ hosts.find(h => h.id === currentTarget).note }}</p>
 
     <div v-if="loading && !stats" class="state state-loading">加载中…</div>
     <div v-else-if="error && !stats" class="state state-error">{{ error }}</div>
@@ -351,7 +353,7 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <p v-if="stats.warnings?.length" class="muted" data-testid="monitor-warnings">部分指标不可用：{{ stats.warnings.join('；') }}</p>
+      <p v-if="stats.warnings?.length" class="muted" data-testid="monitor-warnings">部分指标不可用：{{ warningTexts(stats.warnings).join('；') }}</p>
 
       <section v-if="currentTarget === 'local'" class="section">
         <h2 class="section-title">进程列表</h2>

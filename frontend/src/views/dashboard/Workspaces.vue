@@ -28,6 +28,7 @@ function newTask(){editing.value=null;showForm.value=true;showServer.value=false
 function edit(task){editing.value=task;showForm.value=true;showServer.value=false}
 async function saved(task){showForm.value=false;editing.value=null;await load();if(task?.id){selectedId.value=task.id;serverId.value=String(task.server_id);kind.value=''}}
 async function serverSaved(server,authMode){authSuggestions.value[server.id]=authMode;showServer.value=false;await load();serverId.value=String(server.id)}
+async function serverUpdated(server){servers.value=servers.value.map(s=>s.id===server.id?server:s);await load()}
 function removed(id){tasks.value=tasks.value.filter(t=>t.id!==id);selectedId.value=null}
 onMounted(load)
 onBeforeUnmount(()=>{seq++;controller?.abort()})
@@ -38,7 +39,7 @@ onBeforeUnmount(()=>{seq++;controller?.abort()})
   <div v-if="error" class="ws-error" role="alert">{{ error }} · 已加载的数据保持显示 <button :disabled="loading" @click="load">重试</button></div>
   <AddServerForm v-if="showServer" @saved="serverSaved" @cancel="showServer=false" />
   <div class="ws-filter-bar"><label>服务器<select v-model="serverId"><option value="">全部服务器</option><option v-for="s in servers" :key="s.id" :value="String(s.id)">{{ s.name }} · {{ s.host }}</option></select></label><label>任务类型<select v-model="kind"><option value="">全部类型</option><option v-for="(label,value) in kindLabels" :key="value" :value="value">{{ label }}</option></select></label><button :disabled="loading" @click="load">{{ loading?'加载中…':'刷新列表' }}</button><span class="ws-muted">{{ visible.length }} 个任务</span></div>
-  <ConnectionPanel v-if="connectionServer" :server="connectionServer" :initial-auth-mode="authSuggestions[connectionServer.id]" />
+  <ConnectionPanel v-if="connectionServer" :server="connectionServer" :initial-auth-mode="authSuggestions[connectionServer.id]" @updated="serverUpdated" />
   <section v-else-if="!loading&&!showServer" class="ws-panel ws-empty"><span class="ws-empty-mark">↗</span><h2>从一台服务器开始</h2><p>添加连接目标、核对主机指纹，然后浏览目录并登记已有任务。</p><button class="ws-primary" @click="showServer=true">添加第一台服务器</button></section>
   <TaskForm v-if="showForm" :key="editing?.id||'new'" :servers="servers" :task="editing||undefined" :initial-server="Number(serverId)||connectionServer?.id" @saved="saved" @cancel="showForm=false" />
   <div v-else class="ws-board"><aside class="ws-task-list" aria-label="任务列表"><div class="ws-list-heading"><h2>我的任务</h2><span>{{ visible.length }}</span></div><button v-for="task in visible" :key="task.id" :data-testid="'task-'+task.id" class="ws-task-card" :class="{selected:selected?.id===task.id}" :aria-pressed="selected?.id===task.id" @click="selectedId=task.id"><span class="ws-row"><span class="ws-badge">{{ kindLabels[task.kind] }}</span><span class="ws-muted">#{{ task.id }}</span></span><strong>{{ task.name }}</strong><span class="ws-card-server">{{ servers.find(s=>s.id===task.server_id)?.name||'服务器 #'+task.server_id }}</span><code>{{ task.root_path }}</code><span class="ws-card-foot">{{ task.pid?'绑定 PID '+task.pid:'未绑定进程' }}<span>打开 →</span></span></button><div v-if="!visible.length&&!loading" class="ws-empty-list"><h3>这里还没有任务</h3><p>登记已存在的训练、网站或定时任务，将目录和进程留在一个地方。</p><button :disabled="!servers.length" @click="newTask">登记任务</button></div></aside>

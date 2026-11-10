@@ -51,32 +51,51 @@ def _get_memory() -> Optional[Dict[str, Any]]:
         return None
 
 
+def _disk_entry(mountpoint: str) -> Dict[str, Any]:
+    u = psutil.disk_usage(mountpoint)
+    return {
+        "mountpoint": mountpoint,
+        "total_gb": round(u.total / (1024 ** 3), 2),
+        "used_gb": round(u.used / (1024 ** 3), 2),
+        "free_gb": round(u.free / (1024 ** 3), 2),
+        "percent": round(u.percent, 1),
+    }
+
+
+def _in_container() -> bool:
+    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+
+def _local_host() -> Dict[str, Any]:
+    if _in_container():
+        return {"id": "local", "label": "面板容器", "pinned": True,
+                "note": "面板运行在 Docker 中，这里显示的是面板容器看到的资源，不是你的电脑；远程服务器请在列表中选择。"}
+    return {"id": "local", "label": "本机", "pinned": True}
+
+
 def _get_disk() -> List[Dict[str, Any]]:
-    result = []
+    """Real filesystems once each. In a container, Docker bind-mounts single files such as
+    /etc/resolv.conf from the host disk; those are not filesystems the user cares about,
+    while the overlay root (not a block device, so psutil skips it) is."""
+    result: List[Dict[str, Any]] = []
+    seen_devices = set()
+    root = "C:\\" if os.name == "nt" else "/"
     try:
-        for part in psutil.disk_partitions(all=False):
+        parts = list(psutil.disk_partitions(all=False))
+        # Root is always reported below; other mounts of its disk would show it twice.
+        seen_devices.update(p.device for p in parts if p.mountpoint == root)
+        for part in parts:
+            if part.mountpoint == root or part.device in seen_devices or not os.path.isdir(part.mountpoint):
+                continue
             try:
-                u = psutil.disk_usage(part.mountpoint)
-                result.append({
-                    "mountpoint": part.mountpoint,
-                    "total_gb": round(u.total / (1024 ** 3), 2),
-                    "used_gb": round(u.used / (1024 ** 3), 2),
-                    "free_gb": round(u.free / (1024 ** 3), 2),
-                    "percent": round(u.percent, 1),
-                })
+                result.append(_disk_entry(part.mountpoint))
+                seen_devices.add(part.device)
             except (PermissionError, OSError):
                 continue
-        if not result:
-            # 至少尝试根分区
-            root = "C:\\" if os.name == "nt" else "/"
-            u = psutil.disk_usage(root)
-            result.append({
-                "mountpoint": root,
-                "total_gb": round(u.total / (1024 ** 3), 2),
-                "used_gb": round(u.used / (1024 ** 3), 2),
-                "free_gb": round(u.free / (1024 ** 3), 2),
-                "percent": round(u.percent, 1),
-            })
+    except Exception:
+        pass
+    try:
+        result.insert(0, _disk_entry(root))
     except Exception:
         pass
     return result
@@ -151,7 +170,7 @@ def get_hosts(
     db: Annotated[Session, Depends(get_db)],
 ):
     """本机 + 当前用户在任务工作区添加的服务器；只有已确认指纹的服务器可以采集。"""
-    hosts = [{"id": "local", "label": "本机", "pinned": True}]
+    hosts = [_local_host()]
     rows = db.query(Server).filter(Server.user_id == current_user.id).order_by(Server.name).all()
     for row in rows:
         pinned = connection_summary(db, current_user, row.id)["pinned"]
