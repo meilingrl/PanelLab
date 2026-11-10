@@ -10,7 +10,7 @@ const remote = { target: 'server:71', cpu_percent: null, load_average: [0.5, 0.4
   disk: [{ mountpoint: '/data', total_gb: 100, used_gb: 70, free_gb: 25, percent: 73.7 }],
   network: { bytes_recv: 1, bytes_sent: 2, rate_recv_kbps: null, rate_sent_kbps: null, network_history: [] },
   gpu: [{ index: 0, name: 'A100', utilization_percent: 87, memory_used_bytes: 1024 ** 3, memory_total_bytes: 40 * 1024 ** 3 }],
-  warnings: ['Process visibility is restricted'] }
+  warnings: ['Process visibility is restricted', 'GPU unavailable'] }
 let wrappers = [], pending = {}, legacy
 const response = (data, ok = true, status = ok ? 200 : 503) => ({ ok, status, json: async () => data })
 const statsCalls = () => fetch.mock.calls.filter(([u]) => u.startsWith('/api/monitor/stats'))
@@ -51,6 +51,7 @@ it('shows remote CPU baseline, disk, GPU and warnings, hiding local-only process
   expect(w.text()).toContain('/data')
   expect(w.get('[data-testid="gpu-row"]').text()).toContain('A100')
   expect(w.get('[data-testid="monitor-warnings"]').text()).toContain('Process visibility')
+  expect(w.get('[data-testid="monitor-warnings"]').text()).toContain('未检测到 NVIDIA GPU')
   expect(w.text()).not.toContain('进程列表')
 })
 

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
+import { warningTexts } from '../../composables/remoteWarnings'
 
 Chart.register(...registerables)
 
@@ -351,7 +352,7 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <p v-if="stats.warnings?.length" class="muted" data-testid="monitor-warnings">部分指标不可用：{{ stats.warnings.join('；') }}</p>
+      <p v-if="stats.warnings?.length" class="muted" data-testid="monitor-warnings">部分指标不可用：{{ warningTexts(stats.warnings).join('；') }}</p>
 
       <section v-if="currentTarget === 'local'" class="section">
         <h2 class="section-title">进程列表</h2>

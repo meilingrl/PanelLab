@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { formatBytes, formatTime, statusLabels } from '../../composables/useWorkspaceApi'
 import { useTaskObservation } from '../../composables/useTaskObservation'
+import { warningText } from '../../composables/remoteWarnings'
 const props = defineProps({
   task: { type: Object, required: true },
   server: Object,
@@ -53,6 +54,6 @@ const rateText = value => value === null ? '不可用' : `约 ${formatBytes(valu
   <p class="ws-muted">各接口分别展示，虚拟接口或桥接流量可能重复计数，不汇总为服务器总速率。</p>
   <h4>服务器网络 · 累计计数</h4><p v-if="!observation?.system?.network?.length" class="ws-muted">不可用</p><div v-for="net in observation?.system?.network||[]" :key="net.name" class="ws-counter"><code>{{ net.name }}</code><span>累计接收 {{ formatBytes(net.received_bytes) }}</span><span>累计发送 {{ formatBytes(net.sent_bytes) }}</span></div>
   <h4>服务器 GPU</h4><p v-if="!observation?.system?.gpu?.length" class="ws-muted">不可用</p><div v-for="gpu in observation?.system?.gpu||[]" :key="gpu.index" class="ws-counter"><span>{{ gpu.name }}</span><span>利用率 {{ gpu.utilization_percent==null?'不可用':gpu.utilization_percent+'%' }}</span><span>显存 {{ formatBytes(gpu.memory_used_bytes) }} / {{ formatBytes(gpu.memory_total_bytes) }}</span></div>
-  <p v-for="warning in observation?.warnings||[]" :key="warning" class="ws-notice">{{ warning }}</p>
+  <p v-for="warning in observation?.warnings||[]" :key="warning" class="ws-notice">{{ warningText(warning) }}</p>
  </section>
 </template>
