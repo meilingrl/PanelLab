@@ -67,6 +67,61 @@ def test_overlap_skipped():
     assert d.start == [] and d.skipped_overlap == [("j1", dt(3))]
 
 
+def test_overlap_records_only_latest_eligible():
+    j = job("0 * * * *", window=180)
+    d = plan_tick([j], {"j1": dt(0, 30)}, dt(4, 10), {"j1"})
+    assert d.start == []
+    assert d.skipped_overlap == [("j1", dt(4))]
+    assert d.missed == [("j1", dt(1))]
+
+
+def test_bad_job_does_not_abort_tick():
+    bad = job("not a cron", jid="bad")
+    badtz = job("0 3 * * *", jid="badtz")
+    badtz["schedule"]["tz"] = "Nope/Nowhere"
+    nokey = {"id": "nokey"}
+    good = job("0 3 * * *", jid="good")
+    ls = {k: dt(2) for k in ("bad", "badtz", "nokey", "good")}
+    d = plan_tick([bad, badtz, nokey, good], ls, dt(3, 0), set())
+    assert d.start == [Start("good", "schedule", dt(3), 0)]
+    assert sorted(e[0] for e in d.errors) == ["bad", "badtz", "nokey"]
+    assert all(isinstance(e[1], str) and e[1] for e in d.errors)
+
+
+def test_boundary_on_time_two_minutes():
+    j = job("0 3 * * *", window=60)
+    d = plan_tick([j], {"j1": dt(2)}, dt(3, 2), set())
+    assert d.start == [Start("j1", "schedule", dt(3), 0)]
+    d = plan_tick([j], {"j1": dt(2)}, dt(3, 2) + timedelta(seconds=1), set())
+    assert d.start == [Start("j1", "catch_up", dt(3), 2)]
+
+
+def test_boundary_window_edge():
+    j = job("0 3 * * *", window=30)
+    d = plan_tick([j], {"j1": dt(2)}, dt(3, 30), set())
+    assert d.start == [Start("j1", "catch_up", dt(3), 30)] and d.missed == []
+    d = plan_tick([j], {"j1": dt(2)}, dt(3, 30) + timedelta(seconds=1), set())
+    assert d.start == [] and d.missed == [("j1", dt(3))]
+
+
+def test_due_equal_now_is_on_time():
+    d = plan_tick([job("0 3 * * *")], {"j1": dt(2)}, dt(3), set())
+    assert d.start == [Start("j1", "schedule", dt(3), 0)]
+
+
+def test_due_equal_last_seen_excluded():
+    d = plan_tick([job("0 3 * * *")], {"j1": dt(3)}, dt(3, 1), set())
+    assert d == Decisions([], [], [])
+
+
+def test_window_zero_two_vs_three_minutes_late():
+    j = job("0 3 * * *", window=0)
+    d = plan_tick([j], {"j1": dt(2)}, dt(3, 2), set())
+    assert d.start == [Start("j1", "schedule", dt(3), 0)]
+    d = plan_tick([j], {"j1": dt(2)}, dt(3, 3), set())
+    assert d.start == [] and d.missed == [("j1", dt(3))]
+
+
 def test_overlap_beyond_window_still_missed():
     d = plan_tick([job("0 3 * * *", window=10)], {"j1": dt(2)}, dt(9), {"j1"})
     assert d.missed == [("j1", dt(3))] and d.skipped_overlap == [] and d.start == []

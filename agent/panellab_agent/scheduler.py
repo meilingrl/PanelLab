@@ -10,6 +10,7 @@ from typing import Dict, List, NamedTuple, Set, Tuple
 from . import cron
 
 ON_TIME = timedelta(minutes=2)
+# Older due times beyond this cap are dropped without a missed record.
 MAX_DUE = 1000
 
 
@@ -24,6 +25,7 @@ class Decisions(NamedTuple):
     start: List[Start]
     missed: List[Tuple[str, datetime]]
     skipped_overlap: List[Tuple[str, datetime]]
+    errors: List[Tuple[str, str]] = []
 
 
 def _parse_ts(value: str) -> datetime:
@@ -61,9 +63,20 @@ def plan_tick(
     starts: List[Start] = []
     missed: List[Tuple[str, datetime]] = []
     skipped: List[Tuple[str, datetime]] = []
+    errors: List[Tuple[str, str]] = []
     for job in jobs:
+        jid = job.get("id", "?") if isinstance(job, dict) else "?"
+        try:
+            _plan_job(job, last_seen, now, running, starts, missed, skipped)
+        except (cron.CronError, ValueError, KeyError, TypeError) as exc:
+            errors.append((str(jid), "%s: %s" % (type(exc).__name__, exc)))
+    return Decisions(starts, missed, skipped, errors)
+
+
+def _plan_job(job, last_seen, now, running, starts, missed, skipped) -> None:
+    if True:
         if job.get("paused"):
-            continue
+            return
         jid = job["id"]
         created = _parse_ts(job["created_at"])
         begin = last_seen.get(jid) or created
@@ -72,7 +85,7 @@ def plan_tick(
             begin = max(begin, _parse_ts(job["pause_changed_at"]))
         dues = _due_times(job, begin, now)
         if not dues:
-            continue
+            return
         window = timedelta(minutes=job.get("catch_up_window_minutes", 0))
         eligible = []
         for due in dues:
@@ -82,14 +95,13 @@ def plan_tick(
             else:
                 missed.append((jid, due))
         if not eligible:
-            continue
-        if jid in running:
-            skipped.extend((jid, due) for due in eligible)
-            continue
+            return
         latest = eligible[-1]
+        if jid in running:
+            skipped.append((jid, latest))
+            return
         age = now - latest
         if age <= ON_TIME:
             starts.append(Start(jid, "schedule", latest, 0))
         else:
             starts.append(Start(jid, "catch_up", latest, int(age.total_seconds() // 60)))
-    return Decisions(starts, missed, skipped)
