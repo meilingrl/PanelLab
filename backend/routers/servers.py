@@ -95,6 +95,9 @@ def delete_server(
     from models.workload import Workload
     if db.query(Workload.id).filter(Workload.server_id == row.id).first():
         raise HTTPException(409, detail={"code":"server_has_workloads","message":"Remove or rebind workloads before deleting this server"})
+    from models.server_key import ServerPrivateKey
+    # Do not rely on database FK cascades (SQLite tests do not enforce them) for key material.
+    db.query(ServerPrivateKey).filter(ServerPrivateKey.server_id == row.id).delete()
     db.delete(row)
     db.commit()
     return {"message": "服务器已删除"}

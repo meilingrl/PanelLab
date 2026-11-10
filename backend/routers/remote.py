@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User
 from routers.auth import get_current_user, require_operator
-from schemas.remote import ProbeRequest, TrustRequest, TerminalTicketRequest
+from schemas.remote import PrivateKeyRequest, ProbeRequest, TrustRequest, TerminalTicketRequest
 from services import remote_connection as connection
 
 router = APIRouter(prefix='/api', tags=['remote'])
@@ -21,6 +21,24 @@ def probe(server_id: int, db: DB, user: Owner, body: ProbeRequest = ProbeRequest
 @router.post('/servers/{server_id}/connection/trust')
 def trust(server_id: int, body: TrustRequest, db: DB, user: Owner):
     return connection.trust(db, user, server_id, body.token)
+
+
+@router.get('/servers/{server_id}/private-key')
+def private_key_summary(server_id: int, db: DB, user: Owner):
+    from services import remote_keys
+    return remote_keys.get_summary(db, user, server_id)
+
+
+@router.put('/servers/{server_id}/private-key')
+def set_private_key(server_id: int, body: PrivateKeyRequest, db: DB, user: Owner):
+    from services import remote_keys
+    return remote_keys.save(db, user, server_id, body.private_key, body.passphrase)
+
+
+@router.delete('/servers/{server_id}/private-key')
+def delete_private_key(server_id: int, db: DB, user: Owner):
+    from services import remote_keys
+    return remote_keys.delete(db, user, server_id)
 
 
 @router.get('/servers/{server_id}/connection')

@@ -83,7 +83,7 @@ def trust(db, user, server_id, token):
         p = jwt.decode(token, get_settings().secret_key, algorithms=['HS256'], options={'require': ['exp']})
         if not (p['purpose'] == 'remote-trust' and p['owner'] == user.id and p['server'] == row.id
                 and all(p[k] == v for k, v in target(row).items())
-                and p['auth_mode'] in ('password', 'tailscale')
+                and p['auth_mode'] in ('password', 'key', 'tailscale')
                 and p['key_type'] and p['key_data'] and p['fingerprint']):
             raise ValueError('Invalid trust binding')
     except Exception:
@@ -130,6 +130,9 @@ def open_remote(db, user, server_id):
             if not password:
                 fail('authentication_failed', 'Configure a valid SSH password', 503)
             transport.auth_password(row.username, password, fallback=False)
+        elif pin.auth_mode == 'key':
+            from services.remote_keys import load
+            transport.auth_publickey(row.username, load(db, row))
         elif pin.auth_mode == 'tailscale':
             transport.auth_none(row.username)
         else:
