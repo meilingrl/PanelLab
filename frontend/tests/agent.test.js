@@ -199,3 +199,40 @@ it('M6: a failed heartbeat shows in the status bar; ok or unconfigured shows not
     w.unmount(); wrappers = []
   }
 })
+
+it('B1: a fast run (first output read is eof) refreshes status; badge and cancel button clear', async () => {
+  let finished = false
+  routes['GET /api/servers/71/agent'] = () => response(status({ running: finished ? [] : [{ run_id: 4, job_id: 'backup', started_at: '2026-11-11T03:00:00Z' }] }))
+  routes['POST /api/servers/71/agent/jobs/backup/run'] = () => response({ run_id: 4 })
+  routes['GET /api/servers/71/agent/jobs/backup/runs*'] = () => response({ runs: [run({ id: 4, status: finished ? 'succeeded' : 'running', exit_code: finished ? 0 : null, finished_at: finished ? '2026-11-11T03:00:01Z' : null })] })
+  routes['GET /api/servers/71/agent/runs/4/output*'] = () => { finished = true; return response({ data: 'ok\n', offset: 3, eof: true, truncated: false }) }
+  const w = await mountAgent()
+  await w.get('[data-testid="job-row"]').trigger('click'); await flushPromises()
+  expect(w.get('[data-testid="agent-status"]').text()).toContain('正在运行 1'); expect(w.find('[data-testid="cancel-run"]').exists()).toBe(true)
+  await w.get('[data-testid="run-now"]').trigger('click'); await flushPromises(); await flushPromises()
+  expect(w.get('[data-testid="agent-status"]').text()).toContain('正在运行 0')
+  expect(w.find('[data-testid="cancel-run"]').exists()).toBe(false)
+  expect(w.get('[data-testid="job-row"]').text()).toContain('成功')
+})
+
+it('B1: status is polled every 5 s while runs are listed, and stops when empty', async () => {
+  vi.useFakeTimers()
+  let running = [{ run_id: 4, job_id: 'backup', started_at: '2026-11-11T03:00:00Z' }]
+  routes['GET /api/servers/71/agent'] = () => response(status({ running }))
+  const w = await mountAgent(); await flushPromises()
+  const n = () => count('GET /api/servers/71/agent')
+  const base = n()
+  await vi.advanceTimersByTimeAsync(4900); expect(n()).toBe(base)
+  await vi.advanceTimersByTimeAsync(200); await flushPromises(); expect(n()).toBe(base + 1)
+  running = []
+  await vi.advanceTimersByTimeAsync(5000); await flushPromises(); expect(n()).toBe(base + 2)
+  expect(w.get('[data-testid="agent-status"]').text()).toContain('正在运行 0')
+  await vi.advanceTimersByTimeAsync(20000); await flushPromises(); expect(n()).toBe(base + 2)
+})
+
+it('B3: next run time is shown as a plain local time with the job time zone in the title', async () => {
+  routes['POST /api/servers/71/agent/schedule-preview'] = () => response({ tz: 'Asia/Shanghai', runs: [{ utc: 'u', local: '2026-11-11T03:00:00+08:00' }] })
+  const w = await mountAgent()
+  const cell = w.findAll('[data-testid="job-row"] td')[2]
+  expect(cell.text()).toBe('2026-11-11 03:00'); expect(cell.attributes('title')).toContain('Asia/Shanghai')
+})

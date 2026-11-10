@@ -53,6 +53,12 @@ async function cancelRun() {
   catch (e) { if (seq === generation) error.value = e.message }
   finally { if (seq === generation) busy.value = false }
 }
+// A run the status still lists as running has just ended: ask the page for fresh status once. The next status no longer lists it, so this cannot repeat.
+function outputFinished() {
+  const id = selectedRun.value?.id
+  const live = id != null && (selectedRun.value.status === 'running' || props.runningRuns.some(r => r.run_id === id))
+  loadRuns(); if (live) emit('changed')
+}
 const cron = computed(() => (props.job.schedule?.cron || []).join('；') || '无计划（仅手动）')
 </script>
 <template>
@@ -91,6 +97,6 @@ const cron = computed(() => (props.job.schedule?.cron || []).join('；') || '无
         <td>{{ formatTime(r.started_at) }}</td><td>{{ durationText(r) }}</td><td>{{ exitCodeText(r.exit_code) }}</td></tr></tbody>
     </table></div>
     <button v-if="hasMore" data-testid="load-more-runs" :disabled="loadingRuns" @click="loadRuns({ more: true })">加载更早的记录</button>
-    <RunOutput v-if="selectedRun && !['missed', 'skipped_overlap'].includes(selectedRun.status)" :key="serverId + ':' + selectedRun.id" :server-id="serverId" :run="selectedRun" @finished="loadRuns()" />
+    <RunOutput v-if="selectedRun && !['missed', 'skipped_overlap'].includes(selectedRun.status)" :key="serverId + ':' + selectedRun.id" :server-id="serverId" :run="selectedRun" @finished="outputFinished" />
   </section>
 </template>

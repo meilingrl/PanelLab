@@ -44,6 +44,8 @@ export function triggerLabel(run) {
   return run.trigger || ''
 }
 // A negative exit code is the signal that ended the process (e.g. -15 = SIGTERM).
+// The Agent's `local` times are ISO strings already in the job's time zone; show them as written (no conversion).
+export const localTimeText = s => String(s ?? '').replace(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d).*$/, '$1 $2')
 export function exitCodeText(code) {
   if (code === null || code === undefined) return '—'
   return code < 0 ? `信号 ${Math.abs(code)}` : String(code)

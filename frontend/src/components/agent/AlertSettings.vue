@@ -75,7 +75,7 @@ async function sendTest() {
     <p v-else-if="loadError" class="ws-error" role="alert">{{ loadError }}</p>
     <form v-else @submit.prevent>
       <fieldset :disabled="busy"><legend>邮件（SMTP）</legend>
-        <label><input type="checkbox" data-testid="smtp-on" v-model="form.smtpOn"> 启用邮件告警</label>
+        <label class="ws-follow-label"><input type="checkbox" data-testid="smtp-on" v-model="form.smtpOn"> 启用邮件告警</label>
         <div v-if="form.smtpOn" class="ws-form-grid">
           <label>主机<input data-testid="smtp-host" v-model="form.host" placeholder="smtp.example.com"></label>
           <label>端口<input data-testid="smtp-port" v-model="form.port" inputmode="numeric"></label>
@@ -94,7 +94,7 @@ async function sendTest() {
       <fieldset :disabled="busy"><legend>阈值（留空使用默认值）</legend>
         <p class="ws-muted" data-testid="recover-hint">恢复线为触发线减 5 个百分点（或默认值，取较低者）</p><div class="ws-form-grid">
         <label v-for="[key, label, , , , dflt] in THRESHOLDS" :key="key">{{ label }}<input :data-testid="'th-' + key" v-model="form.th[key]" inputmode="numeric" :placeholder="'默认 ' + dflt"></label></div>
-        <label><input type="checkbox" data-testid="ssh-enabled" v-model="form.ssh"> 启用 SSH 登录失败告警</label></fieldset>
+        <label class="ws-follow-label"><input type="checkbox" data-testid="ssh-enabled" v-model="form.ssh"> 启用 SSH 登录失败告警</label></fieldset>
       <label class="ws-field">心跳 URL（只接受 https，可留空）<input data-testid="heartbeat-url" v-model="form.heartbeat" type="text" placeholder="https://hc-ping.example.com/xxxx" :disabled="busy"></label>
       <p v-if="error" class="ws-error" role="alert" data-testid="alerts-error">{{ error }}</p>
       <div class="ws-actions"><button class="ws-primary" type="button" data-testid="alerts-save" :disabled="busy" @click="save">{{ busy ? '保存中…' : '保存设置' }}</button><button type="button" :disabled="busy" @click="emit('cancel')">取消</button></div>

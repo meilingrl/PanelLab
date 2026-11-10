@@ -144,9 +144,9 @@ async function save() {
         <label>补跑窗口（分钟）<input data-testid="jf-catchup" v-model="form.catch_up_window_minutes" inputmode="numeric"><small class="ws-muted">Agent 离线错过的运行，在窗口内补跑；0 为不补跑</small></label>
       </div>
       <fieldset :disabled="busy"><legend>告警</legend>
-        <label><input type="checkbox" v-model="form.alert.on_failure"> 失败时通知</label>
-        <label><input type="checkbox" v-model="form.alert.on_recovery"> 恢复时通知</label>
-        <label><input type="checkbox" v-model="form.alert.include_output"> 通知附带输出</label></fieldset>
+        <label class="ws-follow-label"><input type="checkbox" v-model="form.alert.on_failure"> 失败时通知</label>
+        <label class="ws-follow-label"><input type="checkbox" v-model="form.alert.on_recovery"> 恢复时通知</label>
+        <label class="ws-follow-label"><input type="checkbox" v-model="form.alert.include_output"> 通知附带输出</label></fieldset>
       <fieldset :disabled="busy"><legend>环境变量（明文）</legend>
         <p class="ws-muted">API 密钥、密码等请放在下方"秘密环境变量"中</p>
         <div v-for="(row, i) in form.env" :key="i" class="ws-row"><input :data-testid="'env-name-' + i" v-model="row.name" class="ws-mono" placeholder="NAME" :aria-label="'环境变量名 ' + (i + 1)"><input :data-testid="'env-value-' + i" v-model="row.value" placeholder="值" :aria-label="'环境变量值 ' + (i + 1)">
