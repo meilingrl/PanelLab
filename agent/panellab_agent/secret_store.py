@@ -57,7 +57,7 @@ class Secrets:
     def set_job_secrets(self, job_id: str, changes: Dict[str, Optional[str]]) -> None:
         """Value None deletes a name; names absent from `changes` stay as they are."""
         for k, v in changes.items():
-            if not isinstance(k, str) or not _NAME_RE.match(k):
+            if not isinstance(k, str) or not _NAME_RE.fullmatch(k):
                 raise StoreError("invalid", "bad secret name: %r" % (k,))
             if v is not None and not isinstance(v, str):
                 raise StoreError("invalid", "secret values must be strings")

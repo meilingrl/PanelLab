@@ -65,15 +65,15 @@ def _parse_iso(text: str) -> datetime:
 
 
 def _validate_definition(job: Dict[str, Any]) -> None:
-    if not isinstance(job.get("id"), str) or not ID_RE.match(job["id"]):
+    if not isinstance(job.get("id"), str) or not ID_RE.fullmatch(job["id"]):
         raise _invalid("id must match ^[a-z0-9][a-z0-9-]{0,47}$")
     name = job.get("name")
     if not isinstance(name, str) or not name or len(name) > 100 or _CONTROL_RE.search(name):
         raise _invalid("name must be 1-100 characters without control characters")
     cmd = job.get("command")
     if (not isinstance(cmd, list) or not cmd
-            or not all(isinstance(a, str) and a and "\0" not in a for a in cmd)):
-        raise _invalid("command must be a non-empty list of non-empty strings without NUL")
+            or not all(isinstance(a, str) and "\0" not in a for a in cmd) or not cmd[0]):
+        raise _invalid("command must be a non-empty list of strings without NUL, first non-empty")
     wd = job.get("workdir")
     if not isinstance(wd, str) or not wd.startswith("/") or "\0" in wd:
         raise _invalid("workdir must be an absolute path")

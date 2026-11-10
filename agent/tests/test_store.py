@@ -74,9 +74,9 @@ def test_update_rejects_invalid(store, changes):
 
 
 @pytest.mark.parametrize("over", [
-    {"id": "Bad"}, {"id": "-a"}, {"id": ""}, {"id": "a" * 49},
+    {"id": "Bad"}, {"id": "ok\n"}, {"id": "-a"}, {"id": ""}, {"id": "a" * 49},
     {"name": ""}, {"name": "x" * 101}, {"name": "a\nb"},
-    {"command": []}, {"command": "echo"}, {"command": [""]}, {"command": ["a\0b"]}, {"command": [1]},
+    {"command": []}, {"command": "echo"}, {"command": [""]}, {"command": ["", "x"]}, {"command": ["a\0b"]}, {"command": [1]},
     {"workdir": "relative"}, {"workdir": ""},
     {"schedule": {"cron": "0 0 * * *", "tz": "UTC"}},
     {"schedule": {"cron": ["bad cron"], "tz": "UTC"}},
@@ -95,6 +95,10 @@ def test_rejects_invalid_job(store, over):
     with pytest.raises(StoreError) as e:
         store.create_job(make_job(**over))
     assert e.value.code == "invalid"
+
+
+def test_command_allows_empty_later_args(store):
+    assert store.create_job(make_job(command=["prog", ""]))["command"] == ["prog", ""]
 
 
 def test_duplicate_id_conflict(store):
@@ -289,3 +293,5 @@ def test_secret_changes_keep_unchanged_and_delete_none(tmp_path):
     assert Secrets(str(tmp_path / "secrets.json")).job_env("j") == {"A": "1", "C": "3"}
     with pytest.raises(StoreError):
         sec.set_job_secrets("j", {"bad name": "x"})
+    with pytest.raises(StoreError):
+        sec.set_job_secrets("j", {"TOKEN\n": "x"})
