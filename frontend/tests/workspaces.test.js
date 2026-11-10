@@ -266,4 +266,8 @@ it('unbinding withdraws a process directory and a deleted working directory is n
  expect(w.text()).toContain('从服务器主目录开始选择');expect(w.find('[data-testid="root-prefilled"]').exists()).toBe(false)
  await w.get('[name="process"]').setValue('44');await flushPromises()
  expect(w.text()).not.toContain('(deleted)');expect(w.text()).toContain('从服务器主目录开始选择')
+ // Switching straight from a suggesting process to one without a usable directory also withdraws it.
+ await w.get('[name="process"]').setValue('42');await flushPromises()
+ await w.get('[name="process"]').setValue('44');await flushPromises()
+ expect(w.text()).toContain('从服务器主目录开始选择');expect(w.find('[data-testid="root-prefilled"]').exists()).toBe(false)
 })

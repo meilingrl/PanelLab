@@ -22,11 +22,12 @@ async function search(){
 }
 function bind(){
  boundProcess.value=processes.value.find(p=>String(p.pid)===selectedPid.value)||null
- // Unbinding withdraws a directory that only came from the process.
- if(!boundProcess.value&&prefilledRoot.value&&form.root_path===prefilledRoot.value){form.root_path='';form.log_path='';prefilledRoot.value=''}
  // Suggest the process's working directory, but never replace a directory the user picked.
- const cwd=boundProcess.value?.cwd
- if(typeof cwd==='string'&&cwd.startsWith('/')&&!cwd.endsWith(' (deleted)')&&(!form.root_path||form.root_path===prefilledRoot.value)){
+ const raw=boundProcess.value?.cwd
+ const cwd=typeof raw==='string'&&raw.startsWith('/')&&!raw.endsWith(' (deleted)')?raw:null
+ // A suggestion from another process (or none) is withdrawn when it no longer applies.
+ if(!cwd&&prefilledRoot.value&&form.root_path===prefilledRoot.value){form.root_path='';form.log_path='';prefilledRoot.value=''}
+ if(cwd&&(!form.root_path||form.root_path===prefilledRoot.value)){
   if(cwd!==form.root_path)form.log_path=''
   form.root_path=cwd;prefilledRoot.value=cwd
  }
