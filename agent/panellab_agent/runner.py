@@ -135,14 +135,14 @@ class Runner:
         last = b"\n"
         try:
             while True:
+                if act.abandon:
+                    tail = (b"" if last == b"\n" else b"\n") + \
+                        ABANDON_MARKER.encode("utf-8") + b"\n"
+                    out.write(tail)
+                    act.written += len(tail)
+                    break
                 ready, _, _ = select.select([fd], [], [], 0.2)
                 if not ready:
-                    if act.abandon:
-                        tail = (b"" if last == b"\n" else b"\n") + \
-                            ABANDON_MARKER.encode("utf-8") + b"\n"
-                        out.write(tail)
-                        act.written += len(tail)
-                        break
                     continue
                 chunk = os.read(fd, 65536)
                 if not chunk:
@@ -308,7 +308,8 @@ class Runner:
                     print("runner: polling run %s failed: %r" % (run_id, e), file=sys.stderr)
             # drain finished attempts: decide retry vs final report
             done, self._done = self._done, []
-            for job, trigger, scheduled_for, attempt, run_id in done:
+            for entry in done:
+                job, trigger, scheduled_for, attempt, run_id = entry
                 try:
                     run = self._store.get_run(run_id)
                     if run is not None and run["status"] in ("failed", "timed_out") \
@@ -320,6 +321,7 @@ class Runner:
                         callbacks.append((job, run))
                 except Exception as e:
                     print("runner: finishing run %s failed: %r" % (run_id, e), file=sys.stderr)
+                    self._done.append(entry)  # retry on the next poll
             due = [r for r in self._retries if r.due <= now]
             self._retries = [r for r in self._retries if r.due > now]
             for r in due:

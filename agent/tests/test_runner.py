@@ -377,3 +377,46 @@ def test_one_raising_entry_does_not_stop_others(env, capsys):
     assert "db hiccup" in capsys.readouterr().err
     r.poll()
     assert real(a)["status"] == "succeeded"
+
+
+CHATTY = ("import os,time\nif os.fork()==0:\n os.setsid()\n"
+          " while True:\n  print('y'*50, flush=True); time.sleep(0.01)\n"
+          "print('main done', flush=True)")
+
+
+@pytest.mark.parametrize("limit", [10 * 1024 * 1024, 200])
+def test_chatty_orphan_is_abandoned(env, limit):
+    r = env.runner(kill_grace_seconds=5, output_limit=limit)
+    rid = r.start(env.job(py(CHATTY)), "manual", None)
+    try:
+        run = env.wait(r, rid, advance=3, timeout=10)
+        assert run["status"] == "succeeded"
+        assert env.text(rid).rstrip().endswith("[作业结束后仍有后台进程占用输出，已停止收集]")
+        assert r.running_job_ids() == set()
+    finally:
+        pids = [p for p in os.popen("pgrep -f 'print..y..\\*50'").read().split()]
+        for p in pids:
+            try:
+                os.kill(int(p), 9)
+            except OSError:
+                pass
+
+
+def test_done_entry_survives_get_run_failure(env):
+    r = env.runner()
+    rid = r.start(env.job(py("pass")), "manual", None)
+    real = env.store.get_run
+    calls = {"n": 0}
+
+    def flaky(run_id):
+        calls["n"] += 1
+        if calls["n"] == 3:  # the drain's lookup, after poll_active + finalize
+            raise RuntimeError("hiccup")
+        return real(run_id)
+    env.store.get_run = flaky
+    end = time.time() + 5
+    while time.time() < end and not env.finished:
+        r.poll()
+        time.sleep(0.02)
+    env.store.get_run = real
+    assert len(env.finished) == 1
