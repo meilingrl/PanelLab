@@ -47,6 +47,13 @@ PRUNE_INTERVAL_S = 3600
 MAX_REQUEST = 1024 * 1024
 SOCKET_TIMEOUT_S = 30
 DRAIN_GRACE_S = 60
+# SIGTERM (systemctl stop/restart, reboot): running jobs get this long to end
+# on their own before they are cancelled (TERM, then KILL after 30 s).
+SHUTDOWN_GRACE_S = 60
+# The main loop gives up waiting after this; plus the mail flush it stays
+# inside the unit's TimeoutStopSec=150.
+SHUTDOWN_HARD_LIMIT_S = 125
+SHUTDOWN_NOTE = "[Agent 停止，作业被中断]"
 MAIL_QUEUE_SIZE = 1000
 MAIL_FLUSH_TIMEOUT_S = 20
 ALREADY_RUNNING = "另一个 Agent 正在运行"
@@ -310,6 +317,11 @@ class Agent:
         self.server_tz = server_tz or server_timezone()
         self.started_at = self.clock.now().isoformat()
         self._draining = False
+        self._stopping = False  # SIGTERM: internal drain, no lease
+        self._shutdown_began: Optional[float] = None
+        self._shutdown_cancelled = False
+        self._interrupted: List[Dict[str, Any]] = []
+        self._shutdown_noticed = False
         self.store = Store(os.path.join(data_dir, "agent.db"), self.clock)
         self.secrets = Secrets(os.path.join(os.path.dirname(os.path.abspath(config_path)),
                                             "secrets.json"))
@@ -446,11 +458,11 @@ class Agent:
     @property
     def draining(self) -> bool:
         with self._lock:
-            return self._draining
+            return self._draining or self._stopping
 
     def run_now(self, job: Dict[str, Any]) -> int:
         with self._lock:
-            if self._draining:
+            if self._draining or self._stopping:
                 raise protocol.ProtocolError("draining", "Agent 正在排空，不再启动新运行")
             if job["id"] in self.runner.running_job_ids():
                 raise protocol.ProtocolError("conflict", "作业正在运行或等待重试")
@@ -470,6 +482,52 @@ class Agent:
             timeouts.append(int(job["timeout_seconds"]) if job else 3600)
         return {"draining": True, "active_count": self.runner.active_count(),
                 "wait_seconds": max(timeouts, default=0) + DRAIN_GRACE_S}
+
+    # ---- SIGTERM shutdown (R22) --------------------------------------------
+
+    def begin_shutdown(self) -> None:
+        """Stop scheduling; running jobs get SHUTDOWN_GRACE_S to finish."""
+        with self._lock:
+            if self._stopping:
+                return
+            self._stopping = True
+            self._shutdown_began = self.clock.monotonic()
+        self.runner.drop_retries()
+
+    def shutdown_step(self) -> bool:
+        """Advance the shutdown; True once no job is running (the loop may exit).
+
+        After the grace the remaining runs are cancelled through the runner;
+        they end `cancelled` (no failure alert) and one notice lists them.
+        """
+        with self._lock:
+            began = self._shutdown_began
+        if began is None:
+            return False
+        if not self._shutdown_cancelled \
+                and self.clock.monotonic() - began >= SHUTDOWN_GRACE_S:
+            self._shutdown_cancelled = True
+            for run in self.store.running_runs():
+                if self.runner.cancel(run["id"], note=SHUTDOWN_NOTE):
+                    self._interrupted.append(run)
+        if self.runner.active_count():
+            return False
+        self.send_shutdown_notice()
+        return True
+
+    def send_shutdown_notice(self) -> None:
+        if self._shutdown_noticed or not self._interrupted:
+            return
+        self._shutdown_noticed = True
+        lines = []
+        for run in self._interrupted:
+            job = self.store.get_job(run["job_id"]) or {}
+            lines.append("作业：%s（%s），运行 #%s，开始于 %s" % (
+                job.get("name") or run["job_id"], run["job_id"], run["id"],
+                run.get("started_at")))
+        self.alerts.notify("Agent 停止时中断了作业",
+                           "Agent 收到停止信号，等待 %d 秒后中断了以下运行（记为已取消）：\n%s"
+                           % (SHUTDOWN_GRACE_S, "\n".join(lines)))
 
     def send_test_email(self) -> None:
         """Bypasses the queue so the caller sees the real result (raises MailError)."""
@@ -561,7 +619,7 @@ class Agent:
             job = by_id[start.job_id]
             try:
                 with self._lock:
-                    if self._draining:
+                    if self._draining or self._stopping:
                         break
                     if start.job_id in self.runner.running_job_ids():
                         self.store.record_skipped(start.job_id, start.scheduled_for)
@@ -746,17 +804,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     threading.Thread(target=server.serve_forever, daemon=True, name="control").start()
     agent.start_background()
     _log("version %s listening on %s" % (__version__, args.socket))
-    draining_for_exit = False
+    stop_began: Optional[float] = None
     try:
         while True:
             began = time.monotonic()
-            if stop.is_set() and not draining_for_exit:
-                draining_for_exit = True
-                agent.drain()
-                _log("SIGTERM received; draining before exit")
+            if stop.is_set() and stop_began is None:
+                stop_began = began
+                agent.begin_shutdown()
+                _log("stop signal received; waiting up to %d s for running jobs"
+                     % SHUTDOWN_GRACE_S)
             agent.tick()
-            if draining_for_exit and agent.runner.active_count() == 0:
-                break
+            if stop_began is not None:
+                if agent.shutdown_step():
+                    break
+                if began - stop_began >= SHUTDOWN_HARD_LIMIT_S:
+                    _log("jobs still running after %d s; exiting anyway" % SHUTDOWN_HARD_LIMIT_S)
+                    agent.send_shutdown_notice()
+                    break
             time.sleep(max(0.05, 1.0 - (time.monotonic() - began)))
     finally:
         server.shutdown()

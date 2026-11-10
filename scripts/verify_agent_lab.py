@@ -285,7 +285,7 @@ class Lab:
                           "RuntimeDirectoryMode", "Environment")
         want = {"User": "panellab", "Group": "panellab", "Restart": "always", "RestartUSec": "5s",
                 "NoNewPrivileges": "yes", "ProtectSystem": "full", "PrivateTmp": "yes",
-                "KillMode": "control-group", "TimeoutStopUSec": "infinity", "UMask": "0007",
+                "KillMode": "mixed", "TimeoutStopUSec": "2min 30s", "UMask": "0007",
                 "ReadWritePaths": "/etc/panellab-agent", "RuntimeDirectoryMode": "0750"}
         bad = {k: props.get(k) for k, v in want.items() if props.get(k) != v}
         self.check("unit hardening and restart properties", not bad, json.dumps(bad))
@@ -384,12 +384,36 @@ class Lab:
         self.check("systemd restarted the daemon after kill -9 (pid %d -> %d)" % (old_pid, new_pid), True)
         wait_for("control socket", lambda: self.ctl("status"), timeout=15)
         orphan = dexec("pgrep", "-u", "panellab", "-x", "sleep", check=False)
-        self.check("job process from the killed daemon is gone (KillMode=control-group)",
+        self.check("job process from the killed daemon is gone (KillMode=mixed)",
                    orphan.returncode != 0, orphan.stdout.strip())
         run = self.run_by_id("lab-sleep", rid) or {}
         self.check("interrupted run marked agent_lost", run.get("status") == "agent_lost", json.dumps(run))
         mail = self.wait_mail(r"作业失败：Lab sleep", mark)
         self.check("agent_lost alert mail received", bool(mail), mail["subject"])
+
+    def verify_restart_interrupts(self) -> None:
+        """R22: systemctl restart gives a running job 60 s, then cancels it with one notice."""
+        rid = self.ctl("jobs.run_now", {"id": "lab-sleep"})["run_id"]
+        wait_for("lab-sleep to be running", lambda: (self.run_by_id("lab-sleep", rid) or {}).get("status") == "running")
+        mark = len(self.mails())
+        began = time.monotonic()
+        r = root("systemctl", "restart", SERVICE, timeout=240, check=False)
+        took = time.monotonic() - began
+        self.check("systemctl restart with a sleep 300 job finishes in under 150 s (%.0fs)" % took,
+                   r.returncode == 0 and took < 150, (r.stdout + r.stderr)[-400:])
+        self.check("service is active again after restart", self.is_active() == "active")
+        wait_for("control socket", lambda: self.ctl("status"), timeout=15)
+        run = self.run_by_id("lab-sleep", rid) or {}
+        out = self.ctl("runs.output", {"run_id": rid, "offset": 0, "limit": 65536})
+        self.check("interrupted run ends cancelled with the stop note",
+                   run.get("status") == "cancelled" and "[Agent 停止，作业被中断]" in out["data"],
+                   json.dumps(run) + out["data"][-200:])
+        mail = self.wait_mail(r"Agent 停止时中断了作业", mark)
+        self.check("one stop notice lists the interrupted run",
+                   "lab-sleep" in mail["body"] and "#%d" % rid in mail["body"], mail["body"][-300:])
+        time.sleep(3)
+        failed = [m["subject"] for m in self.mails()[mark:] if "作业失败" in m["subject"]]
+        self.check("no 作业失败 mail for the interrupted run", not failed, json.dumps(failed, ensure_ascii=False))
 
     def verify_upgrade_drains(self) -> None:
         self.ctl("jobs.create", {"job": {"id": "lab-slow", "name": "Lab slow",
@@ -738,6 +762,7 @@ def main() -> int:
         lab.verify_install(bundle, agent_before)
         lab.verify_protocol_and_alerts()
         lab.verify_crash_restart()
+        lab.verify_restart_interrupts()
         lab.verify_upgrade_drains()
         lab.verify_uninstall(agent_before)
     except (LabError, subprocess.SubprocessError, ValueError, KeyError) as exc:

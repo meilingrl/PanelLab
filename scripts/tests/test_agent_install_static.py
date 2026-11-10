@@ -30,8 +30,8 @@ REQUIRED_UNIT_LINES = (
     "ProtectSystem=full",
     "PrivateTmp=yes",
     "ReadWritePaths=/etc/panellab-agent",
-    "KillMode=control-group",
-    "TimeoutStopSec=infinity",
+    "KillMode=mixed",
+    "TimeoutStopSec=150",
     "UMask=0007",
 )
 

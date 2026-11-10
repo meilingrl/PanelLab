@@ -40,6 +40,7 @@ class _Active:
         self.deadline = started + float(job["timeout_seconds"])
         self.timed_out = False
         self.cancelled = False
+        self.note: Optional[str] = None  # line appended to the output when finalized
         self.term_at: Optional[float] = None
         self.killed = False
         self.kill_at: Optional[float] = None
@@ -243,13 +244,17 @@ class Runner:
             self._active[run_id] = act
             return run_id
 
-    def cancel(self, run_id: int) -> bool:
-        """Request cancellation. Returns False when the run is not active here."""
+    def cancel(self, run_id: int, note: Optional[str] = None) -> bool:
+        """Request cancellation. Returns False when the run is not active here.
+
+        `note` is appended as one line to the run's output when it ends.
+        """
         with self._lock:
             act = self._active.get(run_id)
             if act is None or act.cancelled:
                 return False
             act.cancelled = True
+            act.note = note
             if act.term_at is None and act.proc.poll() is None:
                 act.term_at = self._clock.monotonic()
                 self._signal_group(act, signal.SIGTERM)
@@ -348,6 +353,8 @@ class Runner:
         run = self._store.get_run(act.run_id)
         if run is None or run["status"] != "running":
             return  # someone else already finished it; do not overwrite
+        if act.note:
+            act.written += self._append_line(act.run_id, act.note)
         if act.cancelled:
             status = "cancelled"
         elif act.timed_out:
@@ -358,6 +365,22 @@ class Runner:
             status = "failed"
         self._store.finish_run(act.run_id, status, rc, act.written, act.truncated)
         self._done.append((act.job, act.trigger, act.scheduled_for, act.attempt, act.run_id))
+
+    def _append_line(self, run_id: int, line: str) -> int:
+        """Append `line` on a line of its own; return the bytes written."""
+        path = self._path(run_id)
+        try:
+            with open(path, "ab+") as f:
+                size = f.tell()
+                f.seek(max(size - 1, 0))
+                last = f.read(1) if size else b"\n"
+                data = (b"" if last == b"\n" else b"\n") + line.encode("utf-8") + b"\n"
+                f.seek(0, os.SEEK_END)
+                f.write(data)
+            return len(data)
+        except OSError as e:
+            print("runner: cannot append to output of run %s: %s" % (run_id, e), file=sys.stderr)
+            return 0
 
     def read_output(self, run_id: int, offset: int, limit: int = 65536) -> Dict[str, Any]:
         with self._lock:

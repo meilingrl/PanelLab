@@ -435,3 +435,57 @@ def test_ctl_times_out_on_silent_agent(short_dir, monkeypatch):
 
 def test_ctl_default_timeout_is_120s():
     assert ctl.TIMEOUT_SECONDS == 120
+
+
+# ------------------------------------------------------- R22: SIGTERM shutdown
+
+def _step_until_done(a, timeout=5.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        a.tick()
+        if a.shutdown_step():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_sigterm_cancels_long_job_after_grace_with_one_notice(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, name="长作业", command=["/bin/sleep", "300"])))
+    ok(call(a, "jobs.create", job=job_def(tmp_path, id="k", name="K",
+                                          schedule={"cron": ["* * * * *"], "tz": "UTC"})))
+    rid = ok(call(a, "jobs.run_now", id="j"))["run_id"]
+    a.begin_shutdown()
+    assert a.draining
+    a.tick()
+    assert a.shutdown_step() is False
+    rig.clock.advance(59)
+    a.tick()
+    assert a.shutdown_step() is False
+    assert a.store.get_run(rid)["status"] == "running"
+    rig.clock.advance(2)
+    assert _step_until_done(a)
+    run = a.store.get_run(rid)
+    assert run["status"] == "cancelled"
+    out = a.runner.read_output(rid, 0, 65536)["data"]
+    assert out.rstrip().endswith("[Agent 停止，作业被中断]")
+    assert a.store.list_runs("k") == []  # nothing scheduled while stopping
+    rig.wait_mail(a)
+    notices = [(s, b) for s, b in rig.mailer.sent if "Agent 停止时中断了作业" in s]
+    assert len(notices) == 1
+    assert "长作业" in notices[0][1] and "#%d" % rid in notices[0][1]
+    assert not any("作业失败" in s for s in rig.mailer.subjects()), rig.mailer.subjects()
+    assert a.shutdown_step() is True  # the notice is sent once
+    rig.wait_mail(a)
+    assert sum("Agent 停止时中断了作业" in s for s in rig.mailer.subjects()) == 1
+
+
+def test_sigterm_lets_short_jobs_finish_without_notice(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/sh", "-c", "sleep 0.3"])))
+    rid = ok(call(a, "jobs.run_now", id="j"))["run_id"]
+    a.begin_shutdown()
+    assert _step_until_done(a)
+    assert a.store.get_run(rid)["status"] == "succeeded"
+    rig.wait_mail(a)
+    assert not any("中断" in s for s in rig.mailer.subjects())
