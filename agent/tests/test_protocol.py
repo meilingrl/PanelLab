@@ -272,3 +272,22 @@ def test_runs_list_validates_and_clamps(rig, tmp_path):
     assert len(ok(call(a, "runs.list", job_id="j", status="missed"))["runs"]) == 3
     assert err(call(a, "runs.list", job_id="j", status="weird")) == "invalid"
     assert err(call(a, "runs.list", job_id="nope")) == "not_found"
+
+
+@pytest.mark.parametrize("th", [
+    {"disk_percent": 80, "disk_recover_percent": 80},
+    {"disk_recover_percent": 95},                       # default trigger 90
+    {"cpu_percent": 85, "recover_below_percent": 85},
+    {"mem_percent": 80, "recover_below_percent": 90},   # >= mem trigger
+    {"recover_below_percent": 96},                      # default triggers 95
+])
+def test_alerts_configure_rejects_recover_at_or_above_trigger(rig, th):
+    a = rig.agent()
+    assert err(call(a, "alerts.configure", thresholds=th)) == "invalid"
+    assert not os.path.exists(rig.config)
+
+
+def test_alerts_configure_accepts_recover_below_trigger(rig):
+    a = rig.agent()
+    ok(call(a, "alerts.configure", thresholds={"disk_percent": 80, "disk_recover_percent": 79,
+                                               "cpu_percent": 85, "recover_below_percent": 84}))

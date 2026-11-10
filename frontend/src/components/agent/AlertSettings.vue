@@ -91,7 +91,8 @@ async function sendTest() {
           <span v-if="!loaded?.smtp" class="ws-muted">先保存邮件设置，再发送测试邮件（测试使用已保存的设置）</span></div>
         <p v-if="test.result" data-testid="test-email-result" role="status" :class="test.result.ok ? 'ws-muted' : 'ws-error'">{{ test.result.text }}</p>
       </fieldset>
-      <fieldset :disabled="busy"><legend>阈值（留空使用默认值）</legend><div class="ws-form-grid">
+      <fieldset :disabled="busy"><legend>阈值（留空使用默认值）</legend>
+        <p class="ws-muted" data-testid="recover-hint">恢复线为触发线减 5 个百分点（或默认值，取较低者）</p><div class="ws-form-grid">
         <label v-for="[key, label, , , , dflt] in THRESHOLDS" :key="key">{{ label }}<input :data-testid="'th-' + key" v-model="form.th[key]" inputmode="numeric" :placeholder="'默认 ' + dflt"></label></div>
         <label><input type="checkbox" data-testid="ssh-enabled" v-model="form.ssh"> 启用 SSH 登录失败告警</label></fieldset>
       <label class="ws-field">心跳 URL（只接受 https，可留空）<input data-testid="heartbeat-url" v-model="form.heartbeat" type="text" placeholder="https://hc-ping.example.com/xxxx" :disabled="busy"></label>

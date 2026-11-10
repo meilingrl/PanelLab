@@ -37,6 +37,20 @@ def _cfg(cfg: Optional[dict], key: str):
     return DEFAULTS[key]
 
 
+RECOVER_GAP = 5
+
+
+def effective_recover(cfg: Optional[dict], trigger_key: str) -> float:
+    """Recovery level for a trigger: min(configured or default, trigger - 5).
+
+    Keeps a lowered trigger from sitting above the recovery level, which
+    would fire and recover on every check.
+    """
+    recover_key = "disk_recover_percent" if trigger_key == "disk_percent" \
+        else "recover_below_percent"
+    return min(float(_cfg(cfg, recover_key)), float(_cfg(cfg, trigger_key)) - RECOVER_GAP)
+
+
 # --------------------------------------------------------------------- disk
 
 PSEUDO_FS = {
@@ -81,7 +95,7 @@ class DiskWatch:
 
     def check(self, cfg: Optional[dict] = None) -> List[Tuple[str, bool, str, str]]:
         high = float(_cfg(cfg, "disk_percent"))
-        low = float(_cfg(cfg, "disk_recover_percent"))
+        low = effective_recover(cfg, "disk_percent")
         out = []
         for path in self._mounts():
             try:
@@ -146,7 +160,8 @@ def read_mem_percent(meminfo: str) -> Optional[float]:
 
 class SustainedWatch:
     """Fires after ``sustain_minutes`` continuously at/above the threshold and
-    recovers after ``recover_minutes`` continuously below ``recover_below``.
+    recovers after ``recover_minutes`` continuously below the effective
+    recovery level (see ``effective_recover``).
 
     ``name`` ("cpu" or "mem") selects the ``<name>_percent`` threshold. A gap
     between samples longer than 90 s resets both timers.
@@ -178,7 +193,7 @@ class SustainedWatch:
             else:
                 self._above_since = None
             return None
-        if percent < float(_cfg(cfg, "recover_below_percent")):
+        if percent < effective_recover(cfg, self.name + "_percent"):
             if self._below_since is None:
                 self._below_since = now
             if now - self._below_since >= float(_cfg(cfg, "recover_minutes")) * 60:

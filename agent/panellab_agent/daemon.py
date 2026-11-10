@@ -34,8 +34,8 @@ from .scheduler import plan_tick
 from .secret_store import Secrets
 from .store import DEFAULT_ALERT, Store
 from .watchers import (DEFAULTS as WATCH_DEFAULTS, DiskWatch, Heartbeat, SshWatch,
-                       SustainedWatch, default_ssh_lines, read_cpu_percent,
-                       read_mem_percent)
+                       SustainedWatch, default_ssh_lines, effective_recover,
+                       read_cpu_percent, read_mem_percent)
 
 DOWNTIME_THRESHOLD = timedelta(minutes=5)
 TAIL_LINES = 20
@@ -613,7 +613,7 @@ class Agent:
         subject = "%s 使用率持续偏高：%d%%" % (label, round(pct))
         body = "%s 使用率当前为 %.1f%%（告警阈值 %g%%，持续 %g 分钟；低于 %g%% 持续 %g 分钟恢复）。" % (
             label, pct, th[key + "_percent"], th["sustain_minutes"],
-            th["recover_below_percent"], th["recover_minutes"])
+            effective_recover(cfg, key + "_percent"), th["recover_minutes"])
         self.alerts.observe(key, changed, subject, body)
 
     def _check_disk(self) -> None:

@@ -227,3 +227,46 @@ def test_heartbeat_failure_does_not_raise():
     r = h.last_result()
     assert r["ok"] is False and r["at"]
     assert "secret-token" not in str(r) and r["error"]
+
+
+# ---- R21: effective recovery level = min(configured or default, trigger - 5)
+
+def test_disk_lowered_trigger_fires_once_and_stays_firing():
+    w = DiskWatch(lambda: "/dev/sda1 /data ext4 rw 0 0\n", lambda p: vfs(100, 18))  # 82%
+    cfg = {"disk_percent": 80}
+    r = w.check(cfg)
+    assert [(x[0], x[1]) for x in r] == [("disk:/data", True)]
+    assert "恢复阈值 75%" in r[0][3]
+    for _ in range(5):
+        assert w.check(cfg) == []
+
+
+def test_disk_recover_uses_lower_of_configured_and_trigger_minus_5():
+    state = {"used": 92}
+    w = DiskWatch(lambda: "/dev/sda1 /data ext4 rw 0 0\n",
+                  lambda p: vfs(100, 100 - state["used"]))
+    cfg = {"disk_percent": 90, "disk_recover_percent": 70}
+    assert w.check(cfg)[0][1] is True
+    state["used"] = 80  # below 85 default but above configured 70
+    assert w.check(cfg) == []
+    state["used"] = 69
+    assert w.check(cfg)[0][1] is False
+
+
+def test_cpu_trigger_85_does_not_flap_at_85():
+    clock = FakeClock(T0)
+    w = SustainedWatch("cpu", clock)
+    cfg = {"cpu_percent": 85, "sustain_minutes": 1, "recover_minutes": 1}
+    out = []
+    for _ in range(40):
+        out.append(w.sample(85, cfg))
+        clock.advance(30)
+    assert out.count(True) == 1 and out.count(False) == 0
+    assert w.firing is True
+    # 81% is still above the effective recovery level 80
+    for _ in range(10):
+        assert w.sample(81, cfg) is None
+        clock.advance(30)
+    w.sample(79, cfg)
+    clock.advance(60)
+    assert w.sample(79, cfg) is False

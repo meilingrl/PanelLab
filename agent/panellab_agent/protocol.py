@@ -318,6 +318,20 @@ def _validate_smtp(smtp: Any):
     return clean, password
 
 
+def _check_recover_below_trigger(th: Dict[str, Any]) -> None:
+    """R21: an explicit recovery level must sit below its trigger(s)."""
+    def level(key):
+        return th[key] if th.get(key) is not None else WATCH_DEFAULTS[key]
+    pairs = (("disk_recover_percent", ("disk_percent",), "磁盘恢复线"),
+             ("recover_below_percent", ("cpu_percent", "mem_percent"), "CPU/内存恢复线"))
+    for rkey, triggers, label in pairs:
+        if th.get(rkey) is None:
+            continue
+        for tkey in triggers:
+            if th[rkey] >= level(tkey):
+                raise _invalid("%s %s 必须低于触发线 %s（%s）" % (label, th[rkey], level(tkey), tkey))
+
+
 def op_alerts_configure(agent, args):
     allowed = {"smtp", "thresholds", "heartbeat_url", "ssh_enabled"}
     extra = set(args) - allowed
@@ -342,6 +356,7 @@ def op_alerts_configure(agent, args):
             lo, hi = THRESHOLD_RANGES[k]
             if not _is_num(v) or not lo <= v <= hi:
                 raise _invalid("阈值 %s 必须在 %s-%s 之间" % (k, lo, hi))
+        _check_recover_below_trigger(th)
         changes["thresholds"] = dict(th)
     if "heartbeat_url" in args:
         url = args["heartbeat_url"]

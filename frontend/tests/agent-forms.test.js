@@ -170,6 +170,11 @@ it('smtp password absent when kept, null when deleted', async () => {
   expect(body(1, 'PUT').smtp.password).toBeNull()
 })
 
+it('R21: thresholds explain the recovery level', async () => {
+  const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  expect(t(w, 'recover-hint').text()).toBe('恢复线为触发线减 5 个百分点（或默认值，取较低者）')
+})
+
 it('heartbeat rejects http url', async () => {
   const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
   await t(w, 'heartbeat-url').setValue('http://hc.example.com/ping'); await t(w, 'alerts-save').trigger('click'); await flushPromises()
