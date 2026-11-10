@@ -34,7 +34,7 @@ def counter(value):
     if not 0 <= value <= MAX_SAFE_INTEGER: raise ValueError()
     return value
 
-result = {'system': {'cpu': {'percent': None, 'load_average': None, 'ticks': None}, 'memory': None, 'network': None, 'gpu': None},
+result = {'system': {'cpu': {'percent': None, 'load_average': None, 'ticks': None}, 'memory': None, 'network': None, 'gpu': None, 'disk': None},
           'sampling': {'boot_id': None, 'monotonic_seconds': None},
           'processes': [], 'capabilities': {}, 'warnings': []}
 try:
@@ -93,6 +93,23 @@ try:
     result['system']['network'] = network[:200]
 except (OSError, ValueError, IndexError):
     result['warnings'].append('Network counters unavailable')
+# Block-device filesystems only, one entry per device; the collector never follows client input.
+try:
+    disks, devices = [], set()
+    for line in text('/proc/self/mounts', 262144).splitlines():
+        bits = line.split()
+        if len(bits) < 3 or not bits[0].startswith('/dev/') or bits[2] in ('squashfs', 'iso9660', 'udf') or bits[0] in devices: continue
+        mount = bits[1].replace('\\040', ' ').replace('\\011', '\t').replace('\\012', '\n').replace('\\134', '\\')
+        try: info = os.statvfs(mount)
+        except OSError: continue
+        if info.f_blocks <= 0: continue
+        devices.add(bits[0])
+        disks.append({'mountpoint': mount[:4096], 'total_bytes': info.f_blocks * info.f_frsize,
+                      'available_bytes': info.f_bavail * info.f_frsize, 'used_bytes': (info.f_blocks - info.f_bfree) * info.f_frsize})
+        if len(disks) >= 32: break
+    result['system']['disk'] = disks
+except (OSError, ValueError):
+    result['warnings'].append('Disk usage unavailable')
 def absence_verifiable():
     # ENOENT is ambiguous on hidepid procfs. Read the collector's own mount
     # namespace, conservatively refusing absence claims for unknown/truncated
@@ -247,6 +264,15 @@ def system_evidence(system, warnings):
                     warnings.append('Network interface identity unavailable' if key == 'ifindex' else 'Network counter unavailable')
             entries.append(entry)
         system['network'] = entries
+    if 'disk' in system:
+        disks = []
+        for item in system['disk'] if isinstance(system['disk'], list) else []:
+            if not (isinstance(item, dict) and isinstance(item.get('mountpoint'), str) and item['mountpoint'].startswith('/')
+                    and all(safe_counter(item.get(k)) for k in ('total_bytes', 'available_bytes', 'used_bytes'))):
+                continue
+            disks.append({'mountpoint': item['mountpoint'][:4096], **{k: item[k] for k in ('total_bytes', 'available_bytes', 'used_bytes')}})
+            if len(disks) >= 32: break
+        system['disk'] = disks if isinstance(system['disk'], list) else None
     return system
 
 

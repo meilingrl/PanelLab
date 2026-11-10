@@ -50,6 +50,7 @@ def test_proc_stat_parser_identity_and_no_gpu(tmp_path):
              '/proc/42/cmdline': b'python\x00train.py\x00', '/proc/42/status': 'VmRSS:\t20 kB\n'}
     import builtins, io, os, subprocess
     def fake_open(path, mode='r', *args, **kwargs):
+        if str(path) not in files: raise FileNotFoundError(path)
         data = files[str(path)]
         return io.BytesIO(data) if 'b' in mode else io.StringIO(data)
     from unittest.mock import patch
@@ -58,6 +59,7 @@ def test_proc_stat_parser_identity_and_no_gpu(tmp_path):
         exec(compile(COLLECTOR_SCRIPT, '<collector>', 'exec'), {'__name__': '__main__'})
     value = parse_snapshot(output.getvalue().encode())
     assert value['system']['gpu'] is None
+    assert value['system']['disk'] is None and 'Disk usage unavailable' in value['warnings']
     assert value['system']['cpu']['percent'] is None
     assert value['processes'][0]['identity'] == 'boot-fixture:9876'
     assert value['processes'][0]['memory_bytes'] == 20480
@@ -325,3 +327,42 @@ def test_concealed_pid_enoent_does_not_prove_exit(monkeypatch,mountinfo,expected
     workload = SimpleNamespace(id=1, server_id=71, root_path='/work', pid=9999, process_identity='boot:2345', log_path=None)
     observed = workloads.observation(None, None, workload)
     assert observed['process_status'] == ('exited_or_missing' if expected == 'missing' else 'unknown')
+
+
+def test_collector_reports_real_filesystems_and_parser_bounds_disk():
+    import builtins, io, os, subprocess
+    from unittest.mock import patch
+    from services.remote_probe import COLLECTOR_SCRIPT, parse_snapshot
+    files = {'/proc/self/mountinfo': '25 1 0:5 / /proc rw - proc proc rw\n',
+             '/proc/self/mounts': ('/dev/sda1 / ext4 rw 0 0\nproc /proc proc rw 0 0\ntmpfs /run tmpfs rw 0 0\n'
+                                   '/dev/sdb1 /data\\040set xfs rw 0 0\n/dev/sda1 /var/lib/docker ext4 rw 0 0\n'
+                                   '/dev/loop0 /snap/core squashfs ro 0 0\n/dev/sdc1 /gone ext4 rw 0 0\n')}
+    def fake_open(path, mode='r', *args, **kwargs):
+        if str(path) not in files: raise FileNotFoundError(path)
+        return io.StringIO(files[str(path)])
+    sizes = {'/': (4096, 1000, 400, 300), '/data set': (4096, 2000, 1000, 900)}
+    def statvfs(path):
+        if path not in sizes: raise PermissionError(path)
+        frsize, blocks, bfree, bavail = sizes[path]
+        return os.statvfs_result((frsize, frsize, blocks, bfree, bavail, 0, 0, 0, 0, 255))
+    output = io.StringIO()
+    with patch.object(builtins, 'open', fake_open), patch.object(os, 'statvfs', statvfs), \
+         patch.object(os, 'scandir', side_effect=lambda path: __import__('contextlib').nullcontext(iter([]))), \
+         patch.object(subprocess, 'run', side_effect=FileNotFoundError), patch('sys.stdout', output):
+        exec(compile(COLLECTOR_SCRIPT, '<collector>', 'exec'), {'__name__': '__main__'})
+    disk = parse_snapshot(output.getvalue().encode())['system']['disk']
+    assert disk == [
+        {'mountpoint': '/', 'total_bytes': 4096000, 'available_bytes': 1228800, 'used_bytes': 2457600},
+        {'mountpoint': '/data set', 'total_bytes': 8192000, 'available_bytes': 3686400, 'used_bytes': 4096000},
+    ]
+    payload = {'system': {'cpu': None, 'memory': None, 'network': None, 'gpu': None,
+                          'disk': [{'mountpoint': '/ok', 'total_bytes': 10, 'available_bytes': 5, 'used_bytes': 5},
+                                   {'mountpoint': '/bad', 'total_bytes': -1, 'available_bytes': 5, 'used_bytes': 5},
+                                   {'mountpoint': 7, 'total_bytes': 10, 'available_bytes': 5, 'used_bytes': 5}] + [
+                                   {'mountpoint': f'/m{i}', 'total_bytes': 1, 'available_bytes': 0, 'used_bytes': 1} for i in range(40)]},
+               'processes': [], 'capabilities': {}, 'warnings': []}
+    parsed = parse_snapshot(json.dumps(payload).encode())['system']['disk']
+    assert parsed[0]['mountpoint'] == '/ok' and len(parsed) == 32
+    assert all(d['mountpoint'] != '/bad' for d in parsed)
+    legacy = {'system': {'cpu': None, 'memory': None, 'network': None, 'gpu': None}, 'processes': [], 'capabilities': {}, 'warnings': []}
+    assert parse_snapshot(json.dumps(legacy).encode())['system'].get('disk') is None
