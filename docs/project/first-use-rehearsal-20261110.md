@@ -31,7 +31,7 @@
 
 ## 自己试用时
 
-1. 在仓库根目录运行 `python3 scripts/local_panel.py`，再用 `python3 scripts/local_panel.py password` 查看初始密码，打开 http://127.0.0.1:8765 登录。
+1. 先 `colima start`，并确认 `docker context use colima`；再进入仓库根目录（本机为 `PanelLab/repo/`，不是外层 `PanelLab/`），`git pull --ff-only` 后运行 `python3 scripts/local_panel.py`，再用 `python3 scripts/local_panel.py password` 查看初始密码，打开 http://127.0.0.1:8765 登录。
 2. 「任务工作区 → 添加服务器」，填写平时 `ssh` 用的主机、端口和用户名。只接受密钥的服务器选「SSH 私钥」并上传私钥（建议为面板单独生成一把）。
 3. 获取指纹后，在服务器上对界面显示的密钥类型运行 `ssh-keygen -lf /etc/ssh/ssh_host_<类型>_key.pub`（例如 ed25519），或对照云厂商控制台核对，一致再信任。
 4. 登记一个正在跑的训练或网站：先「查找进程」选中它，目录会自动填入，再选日志文件。
