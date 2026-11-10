@@ -24,6 +24,21 @@ jobs:
       - name: Run MCP tests
         run: python -m pytest scripts/tests/ -v --tb=short
 
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Run agent tests
+        run: |
+          pip install pytest
+          cd agent && python -m pytest -q
+
   backend:
     runs-on: ubuntu-latest
     steps:
