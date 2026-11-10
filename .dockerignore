@@ -1,4 +1,5 @@
-backend/.venv
+.venv*
+backend/.venv*
 backend/__pycache__
 backend/*.pyc
 backend/tests
@@ -8,4 +9,14 @@ frontend/dist
 .github
 *.md
 .env
+backend/.env
+frontend/.env.local
+frontend/.env.*.local
 *.log
+
+# Local test artifacts, launcher credentials and private data
+.superpowers/
+**/__pycache__/
+**/.pytest_cache/
+data/
+**/panellab-local.json*

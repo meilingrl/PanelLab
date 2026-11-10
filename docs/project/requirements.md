@@ -1,5 +1,7 @@
 # PanelLab 需求与设计说明
 
+> 2026-11-02 当前迭代：优先做深[可审查、可恢复的站点变更](../design/design-safe-site-changes.md)，面向可信运维账号；生产关闭自助注册和第三方/演示登录。下文保留原 MVP 与历史构想，不作为本轮功能承诺或生产验收。实际实现与验证见[本轮记录](production-readiness-20261102.md)。
+
 本文档基于用户访谈整理，用于指导开发并随项目迭代更新。各阶段/模块的**局部规划**采用统一 Plan 格式，见 [docs/README.md](../README.md) 与 [design/_template-plan.md](../design/_template-plan.md)。
 
 ---

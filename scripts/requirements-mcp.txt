@@ -1,0 +1,2 @@
+# Optional stdio adapter only; keep separate from backend and stdlib CLI dependencies.
+mcp==2.3.0

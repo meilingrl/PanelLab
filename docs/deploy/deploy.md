@@ -1,12 +1,31 @@
-# PanelLab 生产部署说明
+# PanelLab 部署说明与生产边界
 
-本文档说明如何用 Docker 或传统方式部署 PanelLab。
+本文档区分本地演示与生产模式。当前分支已补充入口防护与站点变更流程，但不代表整站生产验收；先读[验证记录与剩余风险](../project/production-readiness-20261102.md)。
+
+**现有 docker-compose.yml 是本地演示配置**，含固定数据库口令，不可直接公开部署。应用 Dockerfile 也未安装 Nginx；站点管理作用于应用所在文件系统和命令环境，不会自动管理宿主机 Nginx。不要为方便而给面板挂载生产 Docker socket。真实站点应用优先在明确权限的 Linux 环境安装 Nginx 并配置下述路径/命令。
 
 ---
 
-## 一、Docker 部署（推荐）
+## 一、Docker 本地演示
 
-### 1.1 使用 docker-compose（含 MySQL）
+### 1.1 启动本机面板（macOS / Linux）
+
+前置条件为 Python 3、本机 Docker 引擎，以及支持 `up --wait` 的 Docker Compose。在项目根目录执行：
+
+```bash
+python3 scripts/local_panel.py           # 等待 MySQL 就绪，建表并启动打包的前后端
+python3 scripts/local_panel.py password  # 仅在自己的终端查看初始管理员密码
+```
+
+打开 [本机面板](http://127.0.0.1:8765)，账号为 `admin`。首次构建会联网下载镜像、npm 和 Python 依赖。启动器只接受本机 Unix 套接字，选择 context 后会将本次构建与启动固定到该端点。应用容器启用生产模式的登录限制，Web 仅绑定本机回环地址，MySQL 只在该 Compose 项目的网络中提供服务。
+
+- **暂停与继续**。执行 `python3 scripts/local_panel.py stop`，之后运行原启动命令。每次启动会复用镜像构建缓存，已有用户跳过初始化。修改过登录密码后，请用新密码登录。
+- **自选端口**。例如 `python3 scripts/local_panel.py --port 8766`。每次启动传入同一端口即可使用同一浏览器地址。
+- **凭据与数据**。首次运行在 `data/local-panel/panellab-local.json` 中生成独立的项目名、初始管理员密码、数据库口令以及签名和加密使用的 `SECRET_KEY`。启动器要求实例目录归当前用户独占（通常为 `0700`），凭据文件为当前用户独占的常规文件（通常为 `0600`）。它会拒绝可被他人替换的路径及自定义符号链接。MySQL 数据在该项目的 Docker 命名卷中。备份或迁移时请同时保存该文件和数据库。容器管理员能查看容器配置。
+- **隔离第二套面板**。在启动命令中同时指定 `--state-dir /另一个私有目录 --port 8767`。查看初始密码、日志、停止或重新启动时沿用相同的 `--state-dir`。
+- **排查失败**。构建失败时检查 Docker 引擎、镜像仓库及依赖源的网络连接，修复后重试启动命令。容器启动失败可运行 `python3 scripts/local_panel.py logs` 查看最近日志。MySQL 报 `No space left on device` 时检查 Docker 引擎的数据盘空间。Colima 可用 `colima ssh -- df -h /var/lib/docker` 查看剩余容量。端口占用时改用空闲端口。
+
+### 1.2 旧版演示配置（固定口令）
 
 1. **克隆并进入项目目录**
    ```bash
@@ -34,7 +53,7 @@
    - 浏览器打开：http://localhost:8000  
    - 前端已打包进镜像，由后端托管根路径，无需单独起前端。
 
-### 1.2 仅使用 Dockerfile（自备 MySQL）
+### 1.3 仅使用 Dockerfile（自备 MySQL）
 
 若已有 MySQL 服务：
 
@@ -45,8 +64,9 @@ docker run -d -p 8000:8000 \
   -e MYSQL_USER=panel_lab \
   -e MYSQL_PASSWORD=你的密码 \
   -e MYSQL_DATABASE=panel_lab \
-  -e SECRET_KEY=强随机密钥 \
-  -e INIT_ADMIN_PASSWORD=管理员密码 \
+  -e APP_ENV=production \
+  -e SECRET_KEY=替换为至少32字符的独立随机密钥 \
+  -e INIT_ADMIN_PASSWORD=替换为至少12字符的独立强密码 \
   panellab
 ```
 
@@ -77,12 +97,31 @@ docker exec -it <容器ID> python -m init_db
 
 ---
 
-## 三、安全与生产建议
+## 三、生产模式配置
 
-- **SECRET_KEY**：生产环境必须改为强随机字符串。  
-- **INIT_ADMIN_PASSWORD**：首次初始化后建议用「修改密码」或 `change_password.py` 修改。  
-- **HTTPS**：生产建议在 Nginx 或负载均衡层配置 TLS，后端可仅监听内网。  
-- **防火墙**：仅开放必要端口（如 8000 或 80/443）。
+先在隔离环境验证，配置示意如下。示意文本不能直接作为生产密码使用：
+
+```dotenv
+APP_ENV=production
+SECRET_KEY=<至少32字符的独立随机密钥>
+INIT_ADMIN_PASSWORD=<至少12字符的强密码>
+OPERATOR_USERNAMES=admin
+ENABLE_DEMO_AUTH=false
+NGINX_SKIP_APPLY=false
+NGINX_CONF_DIR=/etc/nginx/panellab.d
+NGINX_TEST_CMD=nginx -t
+NGINX_RELOAD_CMD=nginx -s reload
+NGINX_CMD_TIMEOUT_SECONDS=15
+```
+
+- 在 Nginx 主配置的 `http` 段 include 该专用目录的 `*.conf`；面板进程需要此目录读写与指定实例校验/重载的权限。不要让不同实例误用默认 pid 或配置路径；必要时在命令里显式指定 `-c` 和 `-p`。
+- 目录专用于 PanelLab，可减少对手写站点的干扰。现有配置可作为预览基线，但不支持符号链接及超限配置；预览不会创建目录或运行 Nginx。
+- 生产关闭注册、SMS、微信和 QQ 登录；普通账号不能读取或操作站点与 MySQL 管理。`OPERATOR_USERNAMES` 是可信账号白名单，不提供完整 RBAC 或租户隔离。
+- 首次进入生产使用新 SECRET_KEY，使旧开发 JWT 无效；检查已有账号并更新密码。`INIT_ADMIN_PASSWORD` 只影响首次创建，不轮换已有账号。
+- 生产校验会拒绝示例/短密钥、短初始密码、演示认证、跳过应用。长度校验不等于密码强度评估。
+- 使用 HTTPS 与内网后端监听。SSH 主机密钥信任及终端票据仍需改造，现有功能不得据此宣称已完成全面安全加固。
+- 保留数据库、Nginx 主配置和受管目录备份。变更记录不是备份系统；`pending` 或 `recovery_failed` 必须人工核对，禁止无条件重放。
+- 原 `/api/sites` 写接口返回 428，客户端应先请求 `/api/site-changes/preview`，再携返回凭证请求 `/execute`。
 
 ---
 

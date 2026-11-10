@@ -1,5 +1,17 @@
 # PanelLab 文档索引
 
+接手项目请先读[2026-11-10 交接说明](project/handoff-20261110.md)，其中汇总用户目标、累积改动、当前边界和工作规范。
+
+本轮入口：[本地启动](deploy/deploy.md) · [任务与日志](user/remote-workspace.md) · [外部 Agent 接入](user/mcp-access.md) · [实现与验证](project/onboarding-log-follow-20261106.md)。
+
+MCP 工具首版：[MCP接入设计](design/design-mcp-task-access.md) · [实施计划](design/plan-mcp-task-access.md) · [本轮记录](project/mcp-access-20261105.md) · [接入指南](user/mcp-access.md)。
+
+实时观测：[实时观测设计](design/design-live-task-observation.md) · [实施计划](design/plan-live-task-observation.md) · [本轮记录](project/live-observation-20261103.md)。
+
+工作台基础：[远程任务工作台设计](design/design-remote-workspace.md) · [实施计划](design/plan-remote-workspace.md) · [本轮记录](project/remote-workspace-20261103.md)。
+
+上一轮入口：[站点变更设计](design/design-safe-site-changes.md) · [实施计划](design/plan-safe-site-changes.md) · [改进与验证记录](project/production-readiness-20261102.md)。
+
 本目录存放需求、设计与实施说明。**局部项目规划**统一采用「Plan」格式（需求与设计合一），便于迭代与协作。
 
 ---
@@ -47,7 +59,7 @@ docs/
 | **功能路线图** | [project/feature-roadmap.md](project/feature-roadmap.md) | 登录/终端/UX/多机地图/文件管理/流量统计等构想与实现顺序 |
 | **设计/Plan** | [design/](design/) | 各阶段需求与设计（见下表） |
 | **模板** | [design/_template-plan.md](design/_template-plan.md) | 新建局部规划时复制此模板 |
-| **进度** | [project/plan-project-progress.md](project/plan-project-progress.md) | 进度评估、里程碑、周期工作 |
+| **进度** | [design/design-project-progress.md](design/design-project-progress.md) | 进度评估、里程碑、周期工作 |
 | **技术概览** | [project/core-technology-overview.md](project/core-technology-overview.md) | 各主要功能核心技术讲解 |
 | **环境与测试** | [environment/testing-steps.md](environment/testing-steps.md)、[environment/check-mysql.md](environment/check-mysql.md)、[environment/linux-testing-wsl-vm.md](environment/linux-testing-wsl-vm.md) | 环境准备、MySQL 校验、WSL/虚拟机 |
 | **部署** | [deploy/deploy.md](deploy/deploy.md)、[deploy/setup-github.md](deploy/setup-github.md) | Docker/生产部署；GitHub 协作 |

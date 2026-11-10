@@ -1,29 +1,30 @@
-"""Nginx 配置生成、校验与重载。"""
+"""Bounded Nginx file transactions. Callers hold change_lock through DB commit."""
 from __future__ import annotations
-
-import logging
+import hashlib
 import os
 import re
 import shlex
-import shutil
+import stat
 import subprocess
+import tempfile
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
-
 from config import get_settings
+from services.site_validation import validate_config
 
-logger = logging.getLogger(__name__)
-
+MAX_CONFIG_BYTES = 1024 * 1024
+MAX_DIRECTORY_BYTES = 8 * 1024 * 1024
+MAX_CONFIG_FILES = 512
+_PROCESS_LOCK = threading.RLock()
 
 class NginxManagerError(Exception):
-    """Nginx 管理相关可预期异常。"""
-
-    def __init__(self, detail: str):
+    def __init__(self, detail):
         super().__init__(detail)
         self.detail = detail
-
 
 @dataclass
 class SiteRuntimeConfig:
@@ -37,163 +38,197 @@ class SiteRuntimeConfig:
     enabled: bool
     config_filename: Optional[str]
 
-
-def _slug(text: str) -> str:
-    s = re.sub(r"[^a-zA-Z0-9_-]+", "-", text.strip().lower())
-    s = s.strip("-")
-    return s or "site"
-
-
-def _validate_proxy_target(value: str) -> str:
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise NginxManagerError("代理目标地址格式错误，仅支持 http/https URL")
-    return value
-
+@dataclass
+class ChangeResult:
+    status: str
+    steps: list
+    message: str
 
 class NginxManager:
     def __init__(self):
         self.settings = get_settings()
 
-    def get_config_filename(self, site: SiteRuntimeConfig) -> str:
-        if site.config_filename and site.config_filename.strip():
-            return site.config_filename.strip()
-        return f"site-{site.id}-{_slug(site.name)}.conf"
+    def config_dir(self):
+        path = Path(os.path.abspath(self.settings.nginx_conf_dir))
+        # Do not silently canonicalize a symlink into an unrelated directory.
+        if any(p.is_symlink() for p in [path, *path.parents]):
+            raise NginxManagerError('配置目录不能包含符号链接')
+        if path.exists() and not path.is_dir():
+            raise NginxManagerError('配置目录不可用')
+        return path
 
-    def apply_site(self, site: SiteRuntimeConfig) -> str:
-        if self.settings.nginx_skip_apply:
-            logger.info("NGINX_SKIP_APPLY=true，跳过 Nginx 生效（site_id=%s）", site.id)
-            return "已跳过 Nginx 生效（NGINX_SKIP_APPLY=true）"
+    def path(self, filename):
+        if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,200}\.conf', filename or ''):
+            raise NginxManagerError('配置文件名必须是受管 .conf basename')
+        path = self.config_dir() / filename
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise NginxManagerError('配置文件不能是符号链接或特殊文件')
+        return path
 
-        conf_dir = Path(self.settings.nginx_conf_dir).resolve()
-        conf_dir.mkdir(parents=True, exist_ok=True)
-        filename = self.get_config_filename(site)
-        conf_path = conf_dir / filename
+    def get_config_filename(self, site):
+        filename = site.config_filename or f'site-{site.id}.conf'
+        self.path(filename)
+        return filename
 
-        old_exists = conf_path.exists()
-        old_content = conf_path.read_text(encoding="utf-8") if old_exists else ""
-
+    def _read(self, path):
         try:
-            if site.enabled:
-                content = self.render_site_config(site)
-                conf_path.write_text(content, encoding="utf-8")
-            else:
-                if conf_path.exists():
-                    conf_path.unlink()
+            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+            with os.fdopen(fd, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONFIG_BYTES:
+                    raise NginxManagerError('配置文件类型或大小超出安全限制')
+                content = stream.read(MAX_CONFIG_BYTES + 1)
+                if len(content) > MAX_CONFIG_BYTES:
+                    raise NginxManagerError('配置文件超出大小限制')
+                return content
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise NginxManagerError('无法安全读取配置文件') from None
 
-            self._run_command(self.settings.nginx_test_cmd, "Nginx 配置校验失败")
-            self._run_command(self.settings.nginx_reload_cmd, "Nginx 重载失败")
-            return "Nginx 配置已生效"
-        except NginxManagerError:
-            self._restore(conf_path, old_exists, old_content)
-            raise
-
-    def remove_site(self, site: SiteRuntimeConfig) -> str:
-        if self.settings.nginx_skip_apply:
-            return "已跳过 Nginx 删除（NGINX_SKIP_APPLY=true）"
-        conf_dir = Path(self.settings.nginx_conf_dir).resolve()
-        filename = self.get_config_filename(site)
-        conf_path = conf_dir / filename
-        old_exists = conf_path.exists()
-        old_content = conf_path.read_text(encoding="utf-8") if old_exists else ""
+    def read_config(self, filename):
+        content = self._read(self.path(filename))
         try:
-            if conf_path.exists():
-                conf_path.unlink()
-            self._run_command(self.settings.nginx_test_cmd, "Nginx 配置校验失败")
-            self._run_command(self.settings.nginx_reload_cmd, "Nginx 重载失败")
-            return "站点配置已删除并生效"
-        except NginxManagerError:
-            self._restore(conf_path, old_exists, old_content)
-            raise
+            return content.decode('utf-8') if content is not None else None
+        except UnicodeDecodeError:
+            raise NginxManagerError('配置文件不是 UTF-8 文本') from None
 
-    def render_site_config(self, site: SiteRuntimeConfig) -> str:
-        if not site.domain or not site.domain.strip():
-            raise NginxManagerError("域名不能为空")
-        if site.listen_port < 1 or site.listen_port > 65535:
-            raise NginxManagerError("监听端口范围非法")
-        server_name = site.domain.strip()
-
-        if site.site_type == "static":
-            root = (site.root_path or "").strip()
-            if not root:
-                raise NginxManagerError("静态站点必须填写根目录")
-            return (
-                "server {\n"
-                f"    listen {site.listen_port};\n"
-                f"    server_name {server_name};\n\n"
-                f"    root {root};\n"
-                "    index index.html index.htm;\n\n"
-                "    location / {\n"
-                "        try_files $uri $uri/ /index.html;\n"
-                "    }\n"
-                "}\n"
-            )
-
-        if site.site_type == "proxy":
-            target = _validate_proxy_target((site.proxy_target or "").strip())
-            return (
-                "server {\n"
-                f"    listen {site.listen_port};\n"
-                f"    server_name {server_name};\n\n"
-                "    location / {\n"
-                f"        proxy_pass {target};\n"
-                "        proxy_set_header Host $host;\n"
-                "        proxy_set_header X-Real-IP $remote_addr;\n"
-                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
-                "        proxy_set_header X-Forwarded-Proto $scheme;\n"
-                "    }\n"
-                "}\n"
-            )
-        raise NginxManagerError("site_type 只能是 static 或 proxy")
-
-    def _run_command(self, command_text: str, prefix: str):
-        cmd = shlex.split(command_text.strip())
-        if not cmd:
-            raise NginxManagerError(f"{prefix}：命令为空")
-        binary = shutil.which(cmd[0])
-        if binary is None:
-            msg = f"{prefix}：未找到命令 `{cmd[0]}`，请检查 nginx 是否已安装并加入 PATH，或设置 NGINX_SKIP_APPLY=true 跳过（仅用于开发）"
-            logger.error("[NginxManager] %s", msg)
-            raise NginxManagerError(msg)
-        cmd[0] = binary
-        logger.debug("[NginxManager] 执行命令：%s", " ".join(cmd))
+    def fingerprint(self):
+        directory = self.config_dir()
+        digest = hashlib.sha256(b'exists' if directory.exists() else b'missing')
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.settings.nginx_cmd_timeout_seconds,
-                check=False,
-            )
+            names = sorted(p.name for p in directory.glob('*.conf'))
+            if len(names) > MAX_CONFIG_FILES:
+                raise NginxManagerError('配置目录文件数超出安全限制')
+            size = 0
+            for name in names:
+                content = self._read(self.path(name))
+                if content is None:
+                    raise NginxManagerError('配置目录正在变化，请重试预览')
+                size += len(content)
+                if size > MAX_DIRECTORY_BYTES:
+                    raise NginxManagerError('配置目录超出大小限制')
+                digest.update(name.encode() + b'\0' + hashlib.sha256(content).digest())
+            return digest.hexdigest()
+        except OSError:
+            raise NginxManagerError('无法读取配置目录') from None
+
+    @contextmanager
+    def change_lock(self):
+        if not _PROCESS_LOCK.acquire(timeout=5):
+            raise NginxManagerError('另一个配置变更正在执行，请稍后重试')
+        fd = None
+        try:
+            directory = self.config_dir()
+            # Same path for all workers sharing this Nginx directory; preview never opens it.
+            lock_path = directory.parent / ('.' + directory.name + '.panellab.lock')
+            try:
+                import fcntl
+            except ImportError:
+                if not self.settings.nginx_skip_apply:
+                    raise NginxManagerError('此平台不支持实际应用所需的文件锁')
+                yield
+                return
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise NginxManagerError('另一个配置变更正在执行，请稍后重试')
+                    time.sleep(0.05)
+            yield
+        except OSError:
+            raise NginxManagerError('配置锁或文件操作失败，需要人工核查') from None
+        finally:
+            if fd is not None: os.close(fd)
+            _PROCESS_LOCK.release()
+
+    def _replace(self, path, content, restore_mode=None):
+        # Revalidate immediately before touching the target.
+        self.path(path.name)
+        if content is None:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mode = restore_mode if restore_mode is not None else (stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644)
+        fd, temporary = tempfile.mkstemp(prefix='.panellab-', suffix='.tmp', dir=path.parent)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                os.fchmod(stream.fileno(), mode)
+                stream.write(content); stream.flush(); os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+
+    def _run_command(self, command_text, prefix):
+        try:
+            cmd = shlex.split(command_text)
+            if not cmd: raise ValueError()
+            # Output may contain credentials from existing handwritten config; discard it.
+            result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=self.settings.nginx_cmd_timeout_seconds, check=False)
         except subprocess.TimeoutExpired:
-            msg = f"{prefix}：命令执行超时（>{self.settings.nginx_cmd_timeout_seconds}s）"
-            logger.error("[NginxManager] %s", msg)
-            raise NginxManagerError(msg)
-        except Exception as exc:
-            msg = f"{prefix}：{exc}"
-            logger.error("[NginxManager] %s", msg)
-            raise NginxManagerError(msg)
+            raise NginxManagerError(prefix + '：命令超时') from None
+        except (OSError, ValueError):
+            raise NginxManagerError(prefix + '：命令无法执行') from None
+        if result.returncode:
+            raise NginxManagerError(prefix + '：命令返回失败')
 
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip()
-            if not detail:
-                detail = f"退出码 {result.returncode}"
-            logger.error(
-                "[NginxManager] %s（returncode=%s）\nstdout: %s\nstderr: %s",
-                prefix,
-                result.returncode,
-                result.stdout.strip(),
-                result.stderr.strip(),
-            )
-            raise NginxManagerError(f"{prefix}：{detail}")
-
-    @staticmethod
-    def _restore(conf_path: Path, old_exists: bool, old_content: str):
+    def apply_change(self, filename, after):
+        path = self.path(filename)
+        before = self._read(path)
+        before_mode = stat.S_IMODE(path.stat().st_mode) if before is not None else None
+        if self.settings.nginx_skip_apply:
+            return ChangeResult('simulated', [], '模拟完成，未写入配置或执行 Nginx')
+        steps = []
+        reload_attempted = False
+        def step(name, operation):
+            try:
+                operation()
+                steps.append(dict(name=name, status='succeeded', message='步骤完成'))
+            except (NginxManagerError, OSError):
+                steps.append(dict(name=name, status='failed', message='步骤失败或超时；命令输出不予记录'))
+                raise
         try:
-            if old_exists:
-                conf_path.write_text(old_content, encoding="utf-8")
-            elif conf_path.exists():
-                conf_path.unlink()
-        except Exception:
-            # 回滚失败不覆盖主错误，避免掩盖真实失败原因
-            pass
+            step('write', lambda: self._replace(path, after.encode('utf-8') if after is not None else None))
+            step('test', lambda: self._run_command(self.settings.nginx_test_cmd, 'Nginx 配置校验失败'))
+            reload_attempted = True
+            step('reload', lambda: self._run_command(self.settings.nginx_reload_cmd, 'Nginx 重载失败'))
+            return ChangeResult('applied', steps, '配置校验通过，reload 命令成功；未验证 HTTP 可用性或 worker 替换')
+        except (NginxManagerError, OSError):
+            try:
+                step('restore', lambda: self._replace(path, before, before_mode))
+                if reload_attempted:
+                    step('restore_test', lambda: self._run_command(self.settings.nginx_test_cmd, '恢复校验失败'))
+                    step('restore_reload', lambda: self._run_command(self.settings.nginx_reload_cmd, '恢复重载失败'))
+                return ChangeResult('failed_restored', steps, '变更失败，原配置已恢复；如尝试过 reload，恢复校验和 reload 命令已成功')
+            except (NginxManagerError, OSError):
+                return ChangeResult('recovery_failed', steps, '变更及恢复失败，需要人工核查配置与 Nginx 运行状态')
+
+    def apply_site(self, site):
+        after = self.render_site_config(site) if site.enabled else None
+        with self.change_lock(): return self.apply_change(self.get_config_filename(site), after)
+
+    def remove_site(self, site):
+        with self.change_lock(): return self.apply_change(self.get_config_filename(site), None)
+
+    def render_site_config(self, site):
+        try:
+            validate_config(site.domain, site.site_type, site.root_path, site.proxy_target, site.listen_port)
+        except ValueError as exc:
+            raise NginxManagerError(str(exc)) from None
+        head = f'server {{\n    listen {site.listen_port};\n    server_name {site.domain};\n\n'
+        if site.site_type == 'static':
+            return head + f'    root {site.root_path};\n    index index.html index.htm;\n\n    location / {{\n        try_files $uri $uri/ /index.html;\n    }}\n}}\n'
+        return head + f'''    location / {{
+        proxy_pass {site.proxy_target};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
+'''

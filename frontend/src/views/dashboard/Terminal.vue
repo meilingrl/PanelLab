@@ -1,5 +1,6 @@
 <template>
   <div class="terminal-page">
+    <div class="terminal-context"><router-link to="/workspaces">← 任务工作区</router-link><span v-if="currentSession?.cwd">{{ currentSession.host }} · 初始目录 {{ currentSession.cwd }}</span></div>
     <section class="terminal-section">
       <div class="terminal-toolbar">
         <div class="terminal-tabs">
@@ -419,6 +420,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.terminal-context { display: flex; flex-wrap: wrap; gap: 12px; padding: 0 0 12px; font-size: 12px; overflow-wrap: anywhere; color: var(--text-secondary); }
+.terminal-context a { color: var(--accent); text-decoration: none; }
 .terminal-page {
   height: 100%;
   display: flex;

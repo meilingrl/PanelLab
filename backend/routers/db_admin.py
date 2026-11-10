@@ -9,7 +9,7 @@ except ImportError:
 from fastapi import APIRouter, Depends, HTTPException
 
 from models.user import User
-from routers.auth import get_current_user
+from routers.auth import require_operator
 from schemas.db_admin import (
     DatabaseCreate,
     DatabaseItem,
@@ -36,7 +36,7 @@ def _handle_mysql_error(exc: MysqlAdminError) -> None:
 
 
 @router.get("/databases", response_model=DatabaseListResponse)
-def get_databases(_user: Annotated[User, Depends(get_current_user)]):
+def get_databases(_user: Annotated[User, Depends(require_operator)]):
     """返回数据库列表（排除系统库与当前应用库）。"""
     try:
         rows = list_databases()
@@ -52,7 +52,7 @@ def get_databases(_user: Annotated[User, Depends(get_current_user)]):
 @router.post("/databases", response_model=DatabaseItem)
 def post_database(
     body: DatabaseCreate,
-    _user: Annotated[User, Depends(get_current_user)],
+    _user: Annotated[User, Depends(require_operator)],
 ):
     """创建数据库。"""
     try:
@@ -70,7 +70,7 @@ def post_database(
 @router.delete("/databases/{name}")
 def delete_database_by_name(
     name: str,
-    _user: Annotated[User, Depends(get_current_user)],
+    _user: Annotated[User, Depends(require_operator)],
 ):
     """删除数据库。"""
     try:
@@ -83,7 +83,7 @@ def delete_database_by_name(
 
 
 @router.get("/users", response_model=UserListResponse)
-def get_users(_user: Annotated[User, Depends(get_current_user)]):
+def get_users(_user: Annotated[User, Depends(require_operator)]):
     """返回用户列表。"""
     try:
         rows = list_users()
@@ -97,7 +97,7 @@ def get_users(_user: Annotated[User, Depends(get_current_user)]):
 @router.post("/users", response_model=UserItem)
 def post_user(
     body: UserCreate,
-    _user: Annotated[User, Depends(get_current_user)],
+    _user: Annotated[User, Depends(require_operator)],
 ):
     """创建用户并授权。"""
     try:
@@ -118,7 +118,7 @@ def post_user(
 @router.delete("/users/{username}")
 def delete_user_by_name(
     username: str,
-    _user: Annotated[User, Depends(get_current_user)],
+    _user: Annotated[User, Depends(require_operator)],
     host: str = "%",
 ):
     """删除用户。可通过 query 指定 host。"""
@@ -133,13 +133,13 @@ def delete_user_by_name(
 
 # ---------- 计划任务预留（Plan 3.3）----------
 @router.get("/jobs")
-def get_jobs(_user: Annotated[User, Depends(get_current_user)]):
+def get_jobs(_user: Annotated[User, Depends(require_operator)]):
     """计划任务列表（预留，返回空）。"""
     return {"items": []}
 
 
 @router.post("/jobs")
-def post_job(_user: Annotated[User, Depends(get_current_user)]):
+def post_job(_user: Annotated[User, Depends(require_operator)]):
     """新建计划任务（预留）。"""
     raise HTTPException(status_code=501, detail="计划任务功能尚未实现")
 
@@ -147,7 +147,7 @@ def post_job(_user: Annotated[User, Depends(get_current_user)]):
 @router.delete("/jobs/{job_id}")
 def delete_job(
     job_id: int,
-    _user: Annotated[User, Depends(get_current_user)],
+    _user: Annotated[User, Depends(require_operator)],
 ):
     """删除计划任务（预留）。"""
     raise HTTPException(status_code=501, detail="计划任务功能尚未实现")

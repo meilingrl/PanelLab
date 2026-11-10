@@ -3,12 +3,14 @@ from datetime import datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from services.site_validation import validate_config
 
 
 SiteType = Literal["static", "proxy"]
 
 
 class SiteBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
     name: str = Field(..., min_length=1, max_length=64)
     domain: str = Field(..., min_length=1, max_length=255)
     site_type: SiteType
@@ -19,12 +21,11 @@ class SiteBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_by_type(self):
-        if self.site_type == "static":
-            if not self.root_path or not self.root_path.strip():
-                raise ValueError("静态站点必须填写根目录")
-        if self.site_type == "proxy":
-            if not self.proxy_target or not self.proxy_target.strip():
-                raise ValueError("反向代理站点必须填写代理目标地址")
+        self.name = self.name.strip()
+        if not self.name or any(ord(c) < 32 or ord(c) == 127 for c in self.name):
+            raise ValueError("站点名称不能为空或包含控制字符")
+        validate_config(self.domain, self.site_type, self.root_path, self.proxy_target, self.listen_port)
+        self.domain = self.domain.lower()
         return self
 
 

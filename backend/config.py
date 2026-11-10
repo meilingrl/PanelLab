@@ -1,5 +1,7 @@
 """应用配置，从环境变量加载。"""
-from typing import Optional
+from typing import Literal, Optional
+
+from pydantic import model_validator
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,7 +20,9 @@ class Settings(BaseSettings):
     mysql_database: str = "panel_lab"
     database_url: Optional[str] = None
 
-    app_env: str = "development"
+    app_env: Literal["development", "test", "production"] = "development"
+    enable_demo_auth: bool = False
+    operator_usernames: str = "admin"
     secret_key: str = "change-me-in-production"
     # 首次运行时的默认管理员密码（仅当库内无用户时写入）
     init_admin_password: str = "admin"
@@ -46,6 +50,19 @@ class Settings(BaseSettings):
     qq_app_key: str = ""
     qq_redirect_uri: str = ""  # 如 http://localhost:8000/api/auth/qq/callback
     frontend_origin: str = "http://localhost:5173"  # 回调成功后跳转的前端地址，用于带 token 重定向
+
+    @model_validator(mode="after")
+    def validate_production(self):
+        if self.app_env == "production":
+            if len(self.secret_key) < 32 or self.secret_key.strip().lower() in {
+                "change-me-in-production", "your-secret-key-change-in-production"
+            }:
+                raise ValueError("production requires a non-example secret key of at least 32 characters")
+            if len(self.init_admin_password) < 12 or self.init_admin_password.strip().lower() == "admin":
+                raise ValueError("production requires a non-default initial password of at least 12 characters")
+            if self.nginx_skip_apply or self.enable_demo_auth:
+                raise ValueError("production disallows nginx_skip_apply and demo authentication")
+        return self
 
 
 def get_settings() -> Settings:

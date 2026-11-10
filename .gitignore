@@ -38,3 +38,6 @@ frontend/.cache/
 *.db
 *.sqlite
 data/
+
+# Local launcher credentials (including custom state directories)
+panellab-local.json*

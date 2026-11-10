@@ -1,58 +1,61 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import { getTheme, toggleTheme } from '../theme'
-import { useTerminalStore } from '../composables/useTerminalStore'
+import { ref, onMounted } from "vue";
+import { useRouter, useRoute } from "vue-router";
+import { getTheme, toggleTheme } from "../theme";
+import { useTerminalStore } from "../composables/useTerminalStore";
 
-const router = useRouter()
-const route = useRoute()
-const terminalStore = useTerminalStore()
-const theme = ref(getTheme())
-const currentUser = ref({ username: '' })
+const router = useRouter();
+const route = useRoute();
+const terminalStore = useTerminalStore();
+const theme = ref(getTheme());
+const currentUser = ref({ username: "" });
 
 onMounted(async () => {
   try {
-    const res = await fetch('/api/auth/me', {
-      headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}` },
-    })
+    const res = await fetch("/api/auth/me", {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem("panel_token")}`,
+      },
+    });
     if (res.ok) {
-      const data = await res.json()
-      currentUser.value = data
+      const data = await res.json();
+      currentUser.value = data;
     }
   } catch (_) {}
-})
+});
 
 const navItems = [
-  { path: '/settings', name: '用户中心', icon: '👤' },
-  { path: '/monitor', name: '系统监控', icon: '📈' },
-  { path: '/terminal', name: '终端控制', icon: '💻' },
-  { path: '/sites', name: '网站与反向代理', icon: '🌐' },
-  { path: '/databases', name: '数据库管理', icon: '🗄️' },
-]
+  { path: "/workspaces", name: "任务工作区", icon: "▱" },
+  { path: "/settings", name: "用户中心", icon: "👤" },
+  { path: "/monitor", name: "系统监控", icon: "📈" },
+  { path: "/terminal", name: "终端控制", icon: "💻" },
+  { path: "/sites", name: "网站与反向代理", icon: "🌐" },
+  { path: "/databases", name: "数据库管理", icon: "🗄️" },
+];
 
 function isActive(path) {
-  return route.path.startsWith(path)
+  return route.path.startsWith(path);
 }
 
 function onLogout() {
-  terminalStore.closeAllSessions()
-  localStorage.removeItem('panel_token')
-  router.push('/login')
+  terminalStore.closeAllSessions();
+  localStorage.removeItem("panel_token");
+  router.push("/login");
 }
 
 function onToggleTheme() {
-  theme.value = toggleTheme()
+  theme.value = toggleTheme();
 }
 
 function goOverview() {
-  router.push('/settings')
+  router.push("/workspaces");
 }
 </script>
 
 <template>
   <div class="dashboard-layout">
     <aside class="sidebar">
-      <div class="sidebar-header" @click="goOverview">
+      <div class="sidebar-header" role="link" tabindex="0" @click="goOverview" @keydown.enter="goOverview" @keydown.space.prevent="goOverview">
         <span class="app-name">PanelLab</span>
       </div>
       <nav class="sidebar-nav">
@@ -78,7 +81,7 @@ function goOverview() {
             :aria-label="theme === 'light' ? '切换深色' : '切换浅色'"
             @click="onToggleTheme"
           >
-            {{ theme === 'light' ? '🌙' : '☀️' }}
+            {{ theme === "light" ? "🌙" : "☀️" }}
           </button>
           <button type="button" class="btn-side" @click="onLogout">退出</button>
         </div>
@@ -147,7 +150,9 @@ function goOverview() {
   border-radius: 8px;
   color: var(--text-secondary);
   text-decoration: none;
-  transition: background 0.2s, color 0.2s;
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .nav-item:hover {
@@ -210,7 +215,9 @@ function goOverview() {
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.2s, color 0.2s;
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .btn-side:hover {
@@ -264,5 +271,60 @@ function goOverview() {
 
 .footer-link:hover {
   color: var(--text-primary);
+}
+
+@media (max-width: 700px) {
+  .dashboard-layout {
+    flex-direction: column;
+    height: 100dvh;
+  }
+  .sidebar {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-header {
+    grid-column: 1;
+    grid-row: 1;
+    border-bottom: 0;
+    padding: 0.75rem 1rem;
+  }
+  .sidebar-footer {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0.5rem 0.75rem;
+    border-top: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .user-info {
+    margin: 0;
+    max-width: 90px;
+  }
+  .sidebar-nav {
+    grid-column: 1 / -1;
+    display: flex;
+    overflow-x: auto;
+    padding: 0.25rem 0.5rem 0.6rem;
+  }
+  .nav-item {
+    flex-shrink: 0;
+    margin: 0 0.15rem;
+    padding: 0.5rem 0.65rem;
+    white-space: nowrap;
+  }
+  .main {
+    min-height: 0;
+    width: 100%;
+  }
+  .main-content {
+    padding: 1rem;
+  }
+  .global-footer {
+    padding: 0 1rem;
+  }
 }
 </style>

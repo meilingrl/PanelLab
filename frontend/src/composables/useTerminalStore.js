@@ -25,16 +25,30 @@ export function useTerminalStore() {
     return sessions.value.find((s) => s.id === id) || null
   })
 
-  function createSession(server) {
+  async function createSession(server, options = {}) {
+    const signal = options.signal
+    signal?.throwIfAborted()
     const token = localStorage.getItem('panel_token')
     if (!token) {
       return Promise.reject(new Error('未登录'))
+    }
+    const response = await fetch(`/api/servers/${server.id}/terminal-ticket`, {
+      method: 'POST',
+      signal,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: options.cwd ?? null }),
+    })
+    const payload = await response.json()
+    signal?.throwIfAborted()
+    if (!response.ok) {
+      throw new Error(payload.detail?.message || payload.detail || '无法获取终端票据')
     }
     const id = crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const session = {
       id,
       serverId: server.id,
       host: server.host,
+      cwd: options.cwd ?? null,
       status: 'connecting',
       ws: null,
       buffer: [],
@@ -44,24 +58,50 @@ export function useTerminalStore() {
     currentSessionId.value = id
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/api/ws/terminal?token=${encodeURIComponent(token)}&server_id=${server.id}`
+    const wsUrl = `${protocol}//${window.location.host}/api/ws/terminal?ticket=${encodeURIComponent(payload.ticket)}&server_id=${server.id}`
 
     return new Promise((resolve, reject) => {
       let resolved = false
+      let firstFrame = true
+      let readinessTimeout
+      const cleanup = () => {
+        clearTimeout(readinessTimeout)
+        signal?.removeEventListener('abort', cancel)
+      }
+      const cancel = () => {
+        if (resolved) return
+        resolved = true
+        cleanup()
+        reject(new DOMException('Terminal context changed', 'AbortError'))
+        closeSession(id)
+      }
+      signal?.addEventListener('abort', cancel, { once: true })
       try {
         const ws = new WebSocket(wsUrl)
         session.ws = ws
 
-        ws.onopen = () => {
-          updateSessionStatus(id, 'connected', ws)
-          if (!resolved) {
-            resolved = true
-            resolve(sessions.value.find((s) => s.id === id))
-          }
-        }
+        readinessTimeout = setTimeout(() => {
+          if (resolved) return
+          resolved = true
+          cleanup()
+          updateSessionStatus(id, 'error')
+          reject(new Error('SSH 就绪超时，请检查连接后重试'))
+          ws.close()
+        }, 35000)
+        ws.onopen = () => {} // WebSocket transport is not SSH readiness.
 
         ws.onmessage = (event) => {
           const data = event.data
+          // Only the first protocol frame is control data. Once ready, all output is raw.
+          const isFirstFrame = firstFrame
+          firstFrame = false
+          if (isFirstFrame && !resolved && data === JSON.stringify({ type: 'panellab-terminal-ready', version: 1 })) {
+            resolved = true
+            cleanup()
+            updateSessionStatus(id, 'connected', ws)
+            resolve(sessions.value.find((s) => s.id === id))
+            return
+          }
           const s = sessions.value.find((ss) => ss.id === id)
           if (s?.attachedTerm && typeof s.attachedTerm.write === 'function') {
             s.attachedTerm.write(data)
@@ -73,7 +113,8 @@ export function useTerminalStore() {
         }
 
         ws.onclose = () => {
-          updateSessionStatus(id, 'disconnected', null)
+          cleanup()
+          updateSessionStatus(id, resolved && sessions.value.find((s) => s.id === id)?.status === 'connected' ? 'disconnected' : 'error', null)
           const s = sessions.value.find((ss) => ss.id === id)
           if (s?.attachedTerm && typeof s.attachedTerm.writeln === 'function') {
             s.attachedTerm.writeln('\r\n\x1b[33m[系统]\x1b[0m 连接已断开')
@@ -85,12 +126,15 @@ export function useTerminalStore() {
         }
 
         ws.onerror = () => {
+          cleanup()
+          updateSessionStatus(id, 'error')
           if (!resolved) {
             resolved = true
             reject(new Error('WebSocket 错误'))
           }
         }
       } catch (err) {
+        cleanup()
         session.status = 'disconnected'
         sessions.value = sessions.value.filter((s) => s.id !== id)
         if (currentSessionId.value === id) {
@@ -120,7 +164,7 @@ export function useTerminalStore() {
 
   function sendToSession(sessionId, data) {
     const session = sessions.value.find((s) => s.id === sessionId)
-    if (session?.ws && session.ws.readyState === WebSocket.OPEN) {
+    if (session?.status === 'connected' && session.ws && session.ws.readyState === WebSocket.OPEN) {
       session.ws.send(data)
     }
   }
