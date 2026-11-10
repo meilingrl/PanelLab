@@ -120,7 +120,7 @@ class Env:
         self.config = {"smtp": smtp}
         self.password = None
         self.mailer = Mailer(lambda: self.config, lambda: self.password, self.clock)
-        self.book = AlertBook(self.store, self.clock, self.mailer, lambda: self.config, "box1")
+        self.book = AlertBook(self.store, self.clock, self.mailer, "box1")
 
 
 @pytest.fixture
@@ -261,3 +261,54 @@ def test_failed_send_restarts_reminder_clock(tmp_path):
     e.book.observe("k", True, "s", "b")
     a = e.store.get_alert("k")
     assert a["since"] == T0.isoformat() and a["last_sent_at"] == T0.isoformat()
+
+
+def test_crlf_in_subject_is_flattened(tmp_path, server):
+    e = Env(tmp_path, server.port)
+    e.book.observe("k", True, "a\r\nBcc: x@y.z", "b")
+    m = server.parsed()[0]
+    assert m["Subject"] == "[PanelLab · box1] a  Bcc: x@y.z"
+    assert m["Bcc"] is None
+
+
+def test_non_ascii_password_is_auth_failed_and_not_leaked(tmp_path):
+    s = FakeSMTPServer(require_auth=True)
+    try:
+        e = Env(tmp_path, s.port, username="u1")
+        e.password = "秘钥Zq9-secret"
+        with pytest.raises(MailError) as ei:
+            e.mailer.send("s", "b")
+        exc = ei.value
+        assert exc.code == "auth_failed"
+        assert "Zq9" not in str(exc) and "Zq9" not in repr(exc)
+        assert exc.__cause__ is None and exc.__suppress_context__
+        assert "Zq9" not in repr(e.mailer.last_result())
+        assert e.mailer.last_result()["ok"] is False
+    finally:
+        s.close()
+
+
+def test_unknown_security_is_rejected(tmp_path, server):
+    e = Env(tmp_path, server.port, security="tls")
+    with pytest.raises(MailError) as ei:
+        e.mailer.send("s", "b")
+    assert ei.value.code == "not_configured" and ei.value.message == "告警邮件安全方式无效"
+    assert server.messages == []
+    assert e.mailer.last_result()["ok"] is False
+
+
+def test_body_uses_quoted_printable(tmp_path, server):
+    e = Env(tmp_path, server.port)
+    e.mailer.send("s", "中文正文")
+    m = server.parsed()[0]
+    assert m["Content-Transfer-Encoding"] == "quoted-printable"
+    assert m.get_content().strip() == "中文正文"
+
+
+def test_bad_port_is_recorded_not_raised_raw(tmp_path, server):
+    e = Env(tmp_path, server.port)
+    e.config["smtp"]["port"] = "abc"
+    with pytest.raises(MailError) as ei:
+        e.mailer.send("s", "b")
+    assert ei.value.code == "connect_failed"
+    assert e.mailer.last_result()["ok"] is False

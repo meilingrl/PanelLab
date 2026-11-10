@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import smtplib
+import sys
 import ssl
 import threading
 from datetime import datetime, timedelta
@@ -55,39 +56,44 @@ class Mailer:
         if not host or not recipients:
             raise MailError("not_configured", NOT_CONFIGURED_MESSAGE)
         security = smtp_cfg.get("security") or "starttls"
-        port = int(smtp_cfg.get("port") or (465 if security == "ssl" else 25))
-        sender = smtp_cfg.get("from") or smtp_cfg.get("username") or "panellab@localhost"
+        if security not in ("starttls", "ssl", "none"):
+            raise MailError("not_configured", "告警邮件安全方式无效")
         username = smtp_cfg.get("username")
-
-        msg = EmailMessage()
-        msg["From"] = sender
-        msg["To"] = ", ".join(recipients)
-        msg["Subject"] = subject
-        msg["Date"] = format_datetime(self._clock.now())
-        msg.set_content(body, charset="utf-8")
-
         client = None
+        phase = "connect_failed"
         try:
-            try:
-                if security == "ssl":
-                    client = smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT,
-                                              context=ssl.create_default_context())
-                else:
-                    client = smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT)
-            except (OSError, smtplib.SMTPException):
-                raise MailError("connect_failed", "无法连接邮件服务器")
-            try:
+            port = int(smtp_cfg.get("port") or (465 if security == "ssl" else 25))
+            sender = smtp_cfg.get("from") or username or "panellab@localhost"
+            msg = EmailMessage()
+            msg["From"] = _flat(sender)
+            msg["To"] = ", ".join(_flat(r) for r in recipients)
+            msg["Subject"] = _flat(subject)
+            msg["Date"] = format_datetime(self._clock.now())
+            msg.set_content(body, charset="utf-8", cte="quoted-printable")
+
+            if security == "ssl":
+                client = smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT,
+                                          context=ssl.create_default_context())
+            else:
+                client = smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT)
+            client.ehlo()
+            if security == "starttls":
+                client.starttls(context=ssl.create_default_context())
                 client.ehlo()
-                if security == "starttls":
-                    client.starttls(context=ssl.create_default_context())
-                    client.ehlo()
-                if username:
-                    client.login(username, self._password() or "")
-                client.send_message(msg, from_addr=sender, to_addrs=recipients)
-            except smtplib.SMTPAuthenticationError:
-                raise MailError("auth_failed", "邮件服务器认证失败，请检查用户名和密码")
-            except (OSError, smtplib.SMTPException, ssl.SSLError):
-                raise MailError("send_failed", "邮件发送失败")
+            if username:
+                phase = "auth_failed"
+                client.login(username, self._password() or "")
+            phase = "send_failed"
+            client.send_message(msg, from_addr=_flat(sender),
+                                to_addrs=[_flat(r) for r in recipients])
+        except MailError:
+            raise
+        except smtplib.SMTPAuthenticationError:
+            raise MailError("auth_failed", _MESSAGES["auth_failed"]) from None
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                raise
+            raise MailError(phase, _MESSAGES[phase]) from None
         finally:
             if client is not None:
                 try:
@@ -99,13 +105,22 @@ class Mailer:
                         pass
 
 
+def _flat(text: Any) -> str:
+    return str(text).replace("\r", " ").replace("\n", " ")
+
+
+_MESSAGES = {
+    "connect_failed": "无法连接邮件服务器",
+    "auth_failed": "邮件服务器认证失败，请检查用户名和密码",
+    "send_failed": "邮件发送失败",
+}
+
+
 class AlertBook:
-    def __init__(self, store: Any, clock: Clock, mailer: Mailer,
-                 config_getter: Callable[[], Dict[str, Any]], hostname: str) -> None:
+    def __init__(self, store: Any, clock: Clock, mailer: Mailer, hostname: str) -> None:
         self._store = store
         self._clock = clock
         self._mailer = mailer
-        self._config = config_getter
         self._hostname = hostname
         self._lock = threading.Lock()
 
@@ -126,14 +141,11 @@ class AlertBook:
 
     def _send(self, subject: str, body: str) -> None:
         try:
-            self._mailer.send("[PanelLab · %s] %s" % (self._hostname, subject), body)
+            self._mailer.send("[PanelLab · %s] %s" % (_flat(self._hostname), subject), body)
         except MailError:
             pass  # recorded in mailer.last_result()
-        except Exception as exc:  # never let mail trouble escape
-            try:
-                self._mailer._record(False, "邮件发送失败")
-            except Exception:
-                pass
+        except Exception:  # never let mail trouble escape; no exception text
+            print("panellab-agent: alert mail failed unexpectedly", file=sys.stderr)
 
     # ---- public -----------------------------------------------------------
 
