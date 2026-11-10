@@ -1,0 +1,29 @@
+[Unit]
+Description=PanelLab Agent (scheduled jobs and server alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=panellab
+Group=panellab
+ExecStart=/usr/bin/python3 -m panellab_agent.daemon --config /etc/panellab-agent/agent.json --data-dir /var/lib/panellab-agent --socket /run/panellab-agent/agent.sock
+Environment=PYTHONPATH=/opt/panellab-agent/current
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/var/lib/panellab-agent
+RuntimeDirectory=panellab-agent
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+ReadWritePaths=/etc/panellab-agent
+# Jobs are children of the daemon in this cgroup; a crash ends them too (agent_lost).
+KillMode=control-group
+# SIGTERM drains: the daemon waits for running jobs, so stopping may take long.
+TimeoutStopSec=infinity
+
+[Install]
+WantedBy=multi-user.target

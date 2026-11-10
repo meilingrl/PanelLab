@@ -1,0 +1,9 @@
+[Unit]
+Description=Debug SMTP sink on 127.0.0.1:2525 (PanelLab agent lab fixture)
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/panellab-lab/mail_sink.py --host 127.0.0.1 --port 2525 --dir /var/mail-sink
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
