@@ -15,7 +15,7 @@ const editing = ref(null), settings = ref(false)
 const serverId = computed(() => Number(serverKey.value.split(':')[1]))
 const selectedJob = computed(() => jobs.value.find(j => j.id === selectedId.value))
 const previewKey = j => `${j.id}@${j.revision}`
-const nextRuns = computed(() => Object.fromEntries(jobs.value.filter(j => previews.value[previewKey(j)]).map(j => [j.id, previews.value[previewKey(j)]])))
+const nextRuns = computed(() => Object.fromEntries(jobs.value.filter(j => previewKey(j) in previews.value).map(j => [j.id, previews.value[previewKey(j)]])))
 
 const ERROR_TEXT = {
   agent_permission: '请重新登录 SSH，或确认当前 SSH 用户已加入 panellab 组',
@@ -37,9 +37,9 @@ function loadExtras(seq, signal, id) {
     tasks.push(async () => {
       try { const r = await agentApi.runs(id, job.id, { limit: 1 }, signal); if (seq === generation) lastRuns.value = { ...lastRuns.value, [job.id]: r.runs?.[0] || null } } catch (_) { /* keep placeholder */ }
     })
-    if (job.paused || !(job.schedule?.cron || []).length || previewKey(job) in previews.value) continue
+    if (job.paused || !(job.schedule?.cron || []).length || previews.value[previewKey(job)]) continue
     tasks.push(async () => {
-      try { const r = await agentApi.preview(id, job.schedule, signal); if (seq === generation) previews.value = { ...previews.value, [previewKey(job)]: r.runs?.[0]?.local || '无' } } catch (_) { /* shown as pending */ }
+      try { const r = await agentApi.preview(id, job.schedule, signal); if (seq === generation) previews.value = { ...previews.value, [previewKey(job)]: r.runs?.[0]?.local || '无' } } catch (_) { if (seq === generation) previews.value = { ...previews.value, [previewKey(job)]: false } } // false = failed; retried on next refresh
     })
   }
   return pool(tasks)
@@ -107,7 +107,7 @@ onBeforeUnmount(() => { generation++; controller?.abort() })
         <ul><li v-for="a in agentStatus.firing" :key="a.key">{{ a.message }}</li></ul></section>
       <div v-if="editing || settings" data-testid="agent-form-slot" class="ws-panel"><p class="ws-muted">表单将在后续版本提供。</p><button @click="editing = null; settings = false">关闭</button></div>
       <JobList :jobs="jobs" :next-runs="nextRuns" :last-runs="lastRuns" :selected-id="selectedId" @select="selectedId = $event" />
-      <JobDetail v-if="selectedJob" :key="serverId + ':' + selectedJob.id" :server-id="serverId" :job="selectedJob" @changed="refresh" @deleted="deleted" @edit="editing = $event; settings = false" />
+      <JobDetail v-if="selectedJob" :key="serverId + ':' + selectedJob.id" :server-id="serverId" :job="selectedJob" :running-runs="(agentStatus.running || []).filter(r => r.job_id === selectedJob.id)" @changed="refresh" @deleted="deleted" @edit="editing = $event; settings = false" />
     </template>
     <p v-else-if="loading" class="ws-muted">加载中…</p>
   </div>

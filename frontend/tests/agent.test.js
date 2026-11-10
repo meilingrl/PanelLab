@@ -138,3 +138,41 @@ it('output follow stops when run finishes and shows truncated notice', async () 
   await vi.advanceTimersByTimeAsync(10000); await flushPromises()
   expect(outCalls().length).toBe(n)
 })
+
+it('refresh after run now keeps filter, selected run and output', async () => {
+  routes['GET /api/servers/71/agent/jobs/backup/runs*'] = (u) => response({ runs: u.includes('status=failed') ? [run()] : [run(), run({ id: 6, status: 'succeeded' })] })
+  routes['POST /api/servers/71/agent/jobs/backup/run'] = () => response({ run_id: 9 })
+  routes['GET /api/servers/71/agent/runs/5/output*'] = () => response({ data: 'boom', offset: 4, eof: true, truncated: false })
+  const w = await mountAgent()
+  await w.get('[data-testid="job-row"]').trigger('click'); await flushPromises()
+  await w.get('[data-testid="run-filter"]').setValue('failed'); await flushPromises()
+  await w.get('[data-testid="run-row"]').trigger('click'); await flushPromises()
+  await w.get('[data-testid="run-now"]').trigger('click'); await flushPromises()
+  expect(w.get('[data-testid="run-filter"]').element.value).toBe('failed')
+  expect(w.get('[data-testid="run-output"]').text()).toContain('boom')
+})
+
+it('failed schedule preview shows a dash with a hint and retries on refresh', async () => {
+  let ok = false
+  routes['POST /api/servers/71/agent/schedule-preview'] = () => ok ? response({ tz: 'UTC', runs: [{ utc: 'u', local: '2026-11-12 03:00' }] }) : failure('agent_unreachable', 'x', 503)
+  routes['POST /api/servers/71/agent/jobs/backup/pause'] = () => response(job())
+  const w = await mountAgent()
+  const cell = () => w.findAll('[data-testid="job-row"] td')[2]
+  expect(cell().text()).toBe('—'); expect(cell().attributes('title')).toBe('无法计算下次运行时间')
+  ok = true
+  await w.get('[data-testid="job-row"]').trigger('click'); await flushPromises()
+  await w.get('[data-testid="pause-job"]').trigger('click'); await flushPromises()
+  expect(cell().text()).toBe('2026-11-12 03:00')
+})
+
+it('cancel is offered from status running even when a filter hides the running row', async () => {
+  routes['GET /api/servers/71/agent'] = () => response(status({ running: [{ run_id: 12, job_id: 'backup', started_at: 'x' }] }))
+  routes['POST /api/servers/71/agent/runs/12/cancel'] = () => response({ cancelled: true })
+  const w = await mountAgent()
+  await w.get('[data-testid="job-row"]').trigger('click'); await flushPromises()
+  await w.get('[data-testid="run-filter"]').setValue('failed'); await flushPromises()
+  await w.get('[data-testid="cancel-run"]').trigger('click')
+  expect(count('POST /api/servers/71/agent/runs/12/cancel')).toBe(0)
+  await w.get('[data-testid="confirm-cancel-run"]').trigger('click'); await flushPromises()
+  expect(count('POST /api/servers/71/agent/runs/12/cancel')).toBe(1)
+})

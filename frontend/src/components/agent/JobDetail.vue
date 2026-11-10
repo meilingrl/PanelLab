@@ -4,34 +4,37 @@ import { agentApi, runStatusLabels, triggerLabel, durationText } from '../../com
 import { formatTime } from '../../composables/useWorkspaceApi'
 import RunOutput from './RunOutput.vue'
 // `changed` asks the page to refetch status and jobs; `edit` carries the job for the form added by Task 11.
-const props = defineProps({ serverId: { type: Number, required: true }, job: { type: Object, required: true } })
+// runningRuns: this job's entries from the status op's `running` list ({run_id, job_id, started_at}); the cancel target comes from it, not from the loaded history page.
+const props = defineProps({ serverId: { type: Number, required: true }, job: { type: Object, required: true }, runningRuns: { type: Array, default: () => [] } })
 const emit = defineEmits(['changed', 'edit', 'deleted'])
 const PAGE = 20
 const statusFilter = ref(''), runs = ref([]), hasMore = ref(false), loadingRuns = ref(false), selectedRun = ref(null)
 const busy = ref(false), error = ref(''), confirm = ref('')   // confirm: '' | 'delete' | 'cancel'
-const running = computed(() => runs.value.find(r => r.status === 'running'))
-let generation = 0, controller = null
-function reset() { generation++; controller?.abort(); runs.value = []; hasMore.value = false; selectedRun.value = null; confirm.value = ''; error.value = ''; busy.value = false }
+const running = computed(() => { const r = props.runningRuns[0]; return r ? { id: r.run_id } : null })
+// generation guards job/server scope (actions); runsSeq guards the latest runs request only.
+let generation = 0, runsSeq = 0, controller = null
+function reset() { generation++; runsSeq++; controller?.abort(); runs.value = []; hasMore.value = false; selectedRun.value = null; confirm.value = ''; error.value = ''; busy.value = false }
 async function loadRuns({ more = false, select } = {}) {
-  const seq = more ? generation : ++generation
+  const seq = more ? runsSeq : ++runsSeq
   const id = props.job.id, serverId = props.serverId
   if (!more) { controller?.abort(); controller = new AbortController() }
   const signal = controller.signal
   loadingRuns.value = true
   try {
     const r = await agentApi.runs(serverId, id, { status: statusFilter.value, limit: PAGE, before: more ? runs.value.at(-1)?.id : undefined }, signal)
-    if (seq !== generation) return
+    if (seq !== runsSeq) return
     const rows = r.runs || []
     runs.value = more ? [...runs.value, ...rows] : rows
     hasMore.value = rows.length === PAGE
     if (select) selectedRun.value = rows.find(x => x.id === select) || selectedRun.value
     else if (selectedRun.value) selectedRun.value = rows.find(x => x.id === selectedRun.value.id) || selectedRun.value
-  } catch (e) { if (seq === generation && e.name !== 'AbortError') error.value = e.message }
-  finally { if (seq === generation) loadingRuns.value = false }
+  } catch (e) { if (seq === runsSeq && e.name !== 'AbortError') error.value = e.message }
+  finally { if (seq === runsSeq) loadingRuns.value = false }
 }
-watch(() => [props.serverId, props.job.id], () => { reset(); statusFilter.value = ''; loadRuns() }, { immediate: true })
+// Separate primitive sources: a parent refresh swaps the job object but must not reset filter, selection or confirmations.
+watch([() => props.serverId, () => props.job.id], () => { reset(); statusFilter.value = ''; loadRuns() }, { immediate: true })
 watch(statusFilter, () => { selectedRun.value = null; loadRuns() })
-onBeforeUnmount(() => { generation++; controller?.abort() })
+onBeforeUnmount(() => { generation++; runsSeq++; controller?.abort() })
 async function act(name, after) {
   if (busy.value) return
   const seq = generation, id = props.job.id
