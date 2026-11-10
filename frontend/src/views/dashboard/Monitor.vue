@@ -12,15 +12,11 @@ const error = ref('')
 let pollTimer = null
 const POLL_INTERVAL = 5000
 
-const remoteConfig = ref({ configured: false })
-const showRemoteForm = ref(false)
-const remoteHost = ref('')
-const remotePort = ref(22)
-const remoteUser = ref('')
-const remotePassword = ref('')
-const saveRemoteLoading = ref(false)
-const saveRemoteError = ref('')
-const saveRemoteSuccess = ref('')
+const legacyRemote = ref(null)
+const legacyDeleting = ref(false)
+const legacyError = ref('')
+let statsSeq = 0
+let statsInFlight = false
 
 const processes = ref([])
 const processLoading = ref(false)
@@ -31,10 +27,6 @@ const processNameFilter = ref('')
 
 const trafficChartRef = ref(null)
 let trafficChart = null
-const installPsutilLoading = ref(false)
-const installPsutilMessage = ref('')
-const installPsutilError = ref('')
-
 const GAUGE_R = 40
 const GAUGE_C = 2 * Math.PI * GAUGE_R
 function gaugeOffset(percent) {
@@ -73,39 +65,65 @@ async function fetchHosts() {
   } catch (_) {}
 }
 
+function detailMessage(data, fallback) {
+  const detail = data?.detail
+  return (typeof detail === 'string' ? detail : detail?.message) || fallback
+}
+
 async function fetchStats() {
+  // A remote collection can outlast the poll interval; never stack requests.
+  if (statsInFlight) return
+  statsInFlight = true
+  const seq = ++statsSeq
+  const target = currentTarget.value
   try {
-    const url = `/api/monitor/stats?target=${encodeURIComponent(currentTarget.value)}`
+    const url = `/api/monitor/stats?target=${encodeURIComponent(target)}`
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}` },
     })
     if (!res.ok) {
       if (res.status === 401) return
       const data = await res.json().catch(() => ({}))
-      throw new Error(data.detail || '获取失败')
+      throw new Error(detailMessage(data, '获取失败'))
     }
     const data = await res.json()
+    if (seq !== statsSeq || target !== currentTarget.value) return
     stats.value = data
     error.value = ''
   } catch (e) {
-    if (e.name !== 'AbortError') {
+    if (seq === statsSeq && target === currentTarget.value && e.name !== 'AbortError') {
       error.value = e.message || '系统指标暂不可用'
       stats.value = null
     }
   } finally {
-    loading.value = false
+    // A superseded request must not release the guard held by the current target's request.
+    if (seq === statsSeq) {
+      statsInFlight = false
+      loading.value = false
+    }
   }
 }
 
 onMounted(async () => {
-  await fetchRemoteConfig()
+  fetchLegacyRemote()
   await fetchHosts()
   fetchStats()
   fetchProcesses()
   pollTimer = setInterval(fetchStats, POLL_INTERVAL)
 })
 
+function destroyTrafficChart() {
+  if (trafficChart) {
+    trafficChart.destroy()
+    trafficChart = null
+  }
+}
+
 watch(currentTarget, () => {
+  // The canvas is re-created for the new target; a chart bound to the old one would never update.
+  destroyTrafficChart()
+  statsSeq++
+  statsInFlight = false
   loading.value = true
   error.value = ''
   stats.value = null
@@ -116,7 +134,7 @@ watch(currentTarget, () => {
 watch(
   () => stats.value?.network?.network_history,
   () => {
-    if (currentTarget.value === 'local' && stats.value?.network?.network_history?.length) nextTick(updateTrafficChart)
+    if (stats.value?.network?.network_history?.length) nextTick(updateTrafficChart)
   },
   { deep: true }
 )
@@ -151,105 +169,45 @@ async function fetchProcesses() {
   }
 }
 
-async function fetchRemoteConfig() {
+async function fetchLegacyRemote() {
   try {
     const res = await fetch('/api/monitor/remote-config', {
       headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}` },
     })
     if (res.ok) {
-      remoteConfig.value = await res.json()
-      if (remoteConfig.value.configured) {
-        remoteHost.value = remoteConfig.value.host || ''
-        remotePort.value = remoteConfig.value.port || 22
-        remoteUser.value = remoteConfig.value.username || ''
-      }
+      const data = await res.json()
+      legacyRemote.value = data.legacy_configured ? data : null
     }
   } catch (_) {}
 }
 
-async function saveRemoteConfig() {
-  saveRemoteError.value = ''
-  saveRemoteSuccess.value = ''
-  if (!remoteHost.value.trim() || !remoteUser.value.trim() || !remotePassword.value) {
-    saveRemoteError.value = '请填写主机、用户名和密码'
-    return
-  }
-  saveRemoteLoading.value = true
+async function deleteLegacyRemote() {
+  legacyDeleting.value = true
+  legacyError.value = ''
   try {
     const res = await fetch('/api/monitor/remote-config', {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('panel_token')}`,
-      },
-      body: JSON.stringify({
-        host: remoteHost.value.trim(),
-        port: Number(remotePort.value) || 22,
-        username: remoteUser.value.trim(),
-        password: remotePassword.value,
-      }),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) {
-      saveRemoteError.value = data.detail || data.message || '保存失败'
-      return
-    }
-    saveRemoteSuccess.value = data.message || '已保存'
-    remotePassword.value = ''
-    showRemoteForm.value = false
-    await fetchHosts()
-    remoteConfig.value = { configured: true, host: remoteHost.value, port: remotePort.value, username: remoteUser.value }
-  } catch (e) {
-    saveRemoteError.value = e.message || '网络错误'
-  } finally {
-    saveRemoteLoading.value = false
-  }
-}
-
-function openRemoteForm() {
-  showRemoteForm.value = true
-  saveRemoteError.value = ''
-  saveRemoteSuccess.value = ''
-}
-
-async function installPsutilOnRemote() {
-  installPsutilError.value = ''
-  installPsutilMessage.value = ''
-  installPsutilLoading.value = true
-  try {
-    const res = await fetch('/api/monitor/remote-install-psutil', {
-      method: 'POST',
+      method: 'DELETE',
       headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}` },
     })
-    const data = await res.json().catch(() => ({}))
-    if (res.status === 501) {
-      installPsutilMessage.value = data.detail || '功能开发中，请在远程主机手动执行: pip3 install --user psutil'
-      return
-    }
-    if (!res.ok) {
-      installPsutilError.value = data.detail || data.message || '安装失败'
-      return
-    }
-    if (data.ok) {
-      installPsutilMessage.value = data.message || '已在远程主机安装 psutil'
-    } else {
-      installPsutilError.value = data.detail || '安装失败'
-    }
+    if (!res.ok) throw new Error(detailMessage(await res.json().catch(() => ({})), '删除失败'))
+    legacyRemote.value = null
   } catch (e) {
-    installPsutilError.value = e.message || '网络错误'
+    legacyError.value = e.message || '删除失败'
   } finally {
-    installPsutilLoading.value = false
+    legacyDeleting.value = false
   }
+}
+
+function pointLabel(point) {
+  const d = point.ts ? new Date(point.ts * 1000) : new Date(point.observed_at)
+  return d.getMinutes() + ':' + String(d.getSeconds()).padStart(2, '0')
 }
 
 function updateTrafficChart() {
   const net = stats.value?.network
   const history = net?.network_history || []
   if (!trafficChartRef.value || !Array.isArray(history) || history.length === 0) return
-  const labels = history.map((p) => {
-    const d = new Date(p.ts * 1000)
-    return d.getMinutes() + ':' + String(d.getSeconds()).padStart(2, '0')
-  })
+  const labels = history.map(pointLabel)
   const sentData = history.map((p) => p.rate_sent_kbps ?? 0)
   const recvData = history.map((p) => p.rate_recv_kbps ?? 0)
   if (!trafficChart) {
@@ -286,10 +244,8 @@ function updateTrafficChart() {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
-  if (trafficChart) {
-    trafficChart.destroy()
-    trafficChart = null
-  }
+  statsSeq++
+  destroyTrafficChart()
 })
 </script>
 
@@ -299,9 +255,9 @@ onUnmounted(() => {
     <div class="toolbar">
       <label class="target-label" for="monitor-target">监控目标</label>
       <select id="monitor-target" v-model="currentTarget" class="target-select">
-        <option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.label }}</option>
+        <option v-for="h in hosts" :key="h.id" :value="h.id" :disabled="h.pinned === false">{{ h.label }}{{ h.pinned === false ? '（需先在任务工作区确认指纹）' : '' }}</option>
       </select>
-      <span class="subtitle">CPU、内存、磁盘与网络，每 5 秒刷新。</span>
+      <span class="subtitle">CPU、内存、磁盘与网络，每 5 秒刷新。远程服务器来自<router-link to="/workspaces">任务工作区</router-link>，经已确认的主机指纹连接。</span>
     </div>
 
     <div v-if="loading && !stats" class="state state-loading">加载中…</div>
@@ -317,7 +273,9 @@ onUnmounted(() => {
             </svg>
             <span class="gauge-value">{{ stats.cpu_percent }}%</span>
           </div>
+          <p v-else-if="currentTarget !== 'local'" class="muted">等待第二次采样计算区间占用…</p>
           <p v-else class="muted">暂不可用</p>
+          <p v-if="stats.load_average" class="gauge-detail">负载 {{ stats.load_average.join(' / ') }}</p>
         </div>
       </section>
 
@@ -370,13 +328,25 @@ onUnmounted(() => {
               <span class="label">当前速率（KB/s）</span>
               <span class="value">接收 {{ stats.network.rate_recv_kbps ?? '—' }} / 发送 {{ stats.network.rate_sent_kbps ?? '—' }}</span>
             </div>
-            <div v-if="currentTarget === 'local' && stats.network.network_history?.length" class="traffic-chart-wrap">
+            <div v-if="stats.network.network_history?.length" class="traffic-chart-wrap">
               <canvas ref="trafficChartRef" height="200"></canvas>
             </div>
           </template>
           <p v-else class="muted">暂不可用</p>
         </div>
       </section>
+
+      <section v-if="stats.gpu?.length" class="section">
+        <h2 class="section-title">GPU</h2>
+        <div class="card">
+          <div v-for="g in stats.gpu" :key="g.index" class="metric-row" data-testid="gpu-row">
+            <span class="label">#{{ g.index }} {{ g.name }}</span>
+            <span class="value">利用率 {{ g.utilization_percent }}% · 显存 {{ formatBytes(g.memory_used_bytes) }} / {{ formatBytes(g.memory_total_bytes) }}</span>
+          </div>
+        </div>
+      </section>
+
+      <p v-if="stats.warnings?.length" class="muted" data-testid="monitor-warnings">部分指标不可用：{{ stats.warnings.join('；') }}</p>
 
       <section v-if="currentTarget === 'local'" class="section">
         <h2 class="section-title">进程列表</h2>
@@ -438,48 +408,17 @@ onUnmounted(() => {
       </section>
     </template>
 
-    <section class="section remote-section">
-      <h2 class="section-title">远程服务器连接</h2>
+    <section v-if="legacyRemote" class="section remote-section" data-testid="legacy-remote">
+      <h2 class="section-title">旧版远程连接</h2>
       <div class="card">
-        <template v-if="remoteConfig.configured && !showRemoteForm">
-          <p class="remote-summary">
-            已配置：<strong>{{ remoteConfig.host }}:{{ remoteConfig.port }}</strong>（用户 {{ remoteConfig.username }}）
-          </p>
-          <div class="remote-actions">
-            <button type="button" class="btn-secondary" @click="openRemoteForm">修改配置</button>
-            <button type="button" class="btn-secondary" :disabled="installPsutilLoading" @click="installPsutilOnRemote">
-              {{ installPsutilLoading ? '执行中…' : '在远程主机安装 psutil' }}
-            </button>
-          </div>
-          <p v-if="installPsutilMessage" class="form-success">{{ installPsutilMessage }}</p>
-          <p v-if="installPsutilError" class="form-error">{{ installPsutilError }}</p>
-        </template>
-        <template v-else>
-          <p class="remote-hint">填写 Linux 服务器的 SSH 信息，保存后可在上方选择「远程服务器」查看其监控。远程需已安装 Python3 与 psutil。</p>
-          <form class="remote-form" @submit.prevent="saveRemoteConfig">
-            <div class="form-row">
-              <label for="remote-host">主机（IP 或域名）</label>
-              <input id="remote-host" v-model="remoteHost" type="text" placeholder="例如 192.168.1.100" />
-            </div>
-            <div class="form-row">
-              <label for="remote-port">端口</label>
-              <input id="remote-port" v-model.number="remotePort" type="number" min="1" max="65535" placeholder="22" />
-            </div>
-            <div class="form-row">
-              <label for="remote-user">用户名</label>
-              <input id="remote-user" v-model="remoteUser" type="text" placeholder="例如 root" />
-            </div>
-            <div class="form-row">
-              <label for="remote-password">密码</label>
-              <input id="remote-password" v-model="remotePassword" type="password" placeholder="SSH 登录密码" autocomplete="off" />
-            </div>
-            <p v-if="saveRemoteError" class="form-error">{{ saveRemoteError }}</p>
-            <p v-if="saveRemoteSuccess" class="form-success">{{ saveRemoteSuccess }}</p>
-            <button type="submit" class="btn-primary" :disabled="saveRemoteLoading">
-              {{ saveRemoteLoading ? '保存中…' : '保存并连接' }}
-            </button>
-          </form>
-        </template>
+        <p class="remote-summary">
+          此前保存过 <strong>{{ legacyRemote.username }}@{{ legacyRemote.host }}:{{ legacyRemote.port }}</strong> 的连接与加密密码。该方式不核对主机指纹，已停用，不会再用于连接。
+        </p>
+        <p class="remote-hint">请在<router-link to="/workspaces">任务工作区</router-link>添加这台服务器并确认指纹，然后删除旧记录。</p>
+        <p v-if="legacyError" class="form-error">{{ legacyError }}</p>
+        <button type="button" class="btn-secondary" :disabled="legacyDeleting" @click="deleteLegacyRemote">
+          {{ legacyDeleting ? '删除中…' : '删除旧记录与密码' }}
+        </button>
       </div>
     </section>
   </div>
@@ -725,34 +664,6 @@ onUnmounted(() => {
   margin: 0 0 1rem 0;
   font-size: 0.9rem;
   color: var(--text-muted);
-}
-
-.remote-form .form-row {
-  margin-bottom: 1rem;
-}
-
-.remote-form .form-row label {
-  display: block;
-  font-size: 0.9rem;
-  color: var(--text-secondary);
-  margin-bottom: 0.35rem;
-}
-
-.remote-form .form-row input {
-  width: 100%;
-  max-width: 280px;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.95rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  box-sizing: border-box;
-}
-
-.remote-form .form-row input:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 .form-error {
