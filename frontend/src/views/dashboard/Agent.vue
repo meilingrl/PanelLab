@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { agentApi } from '../../composables/useAgentApi'
-import { request } from '../../composables/useWorkspaceApi'
+import { request, formatTime } from '../../composables/useWorkspaceApi'
 import '../../components/workspaces/workspaces.css'
 import JobList from '../../components/agent/JobList.vue'
 import JobDetail from '../../components/agent/JobDetail.vue'
@@ -13,7 +13,7 @@ const hosts = ref([]), serverKey = ref(''), loading = ref(false), hostsError = r
 const agentStatus = ref(null), jobs = ref([]), error = ref(null), notice = ref('')
 const lastRuns = ref({}), previews = ref({}), selectedId = ref(null)
 // `editing` is null, 'new' or a job object (JobForm); `settings` toggles AlertSettings.
-const editing = ref(null), settings = ref(false)
+const editing = ref(null), settings = ref(false), showUpgrade = ref(false)
 const serverId = computed(() => Number(serverKey.value.split(':')[1]))
 const selectedJob = computed(() => jobs.value.find(j => j.id === selectedId.value))
 const previewKey = j => `${j.id}@${j.revision}`
@@ -56,7 +56,7 @@ async function fetchAll(seq, signal, id) {
 async function load() {
   const seq = ++generation; controller?.abort(); controller = new AbortController()
   agentStatus.value = null; jobs.value = []; error.value = null; notice.value = ''; lastRuns.value = {}; previews.value = {}
-  selectedId.value = null; editing.value = null; settings.value = false
+  selectedId.value = null; editing.value = null; settings.value = false; showUpgrade.value = false
   if (!serverKey.value) { loading.value = false; return }
   loading.value = true
   try {
@@ -74,6 +74,9 @@ async function refresh() {
   try { await fetchAll(seq, signal, serverId.value); if (seq === generation) notice.value = '' }
   catch (e) { if (seq === generation && e.name !== 'AbortError') notice.value = errorText(e) }
 }
+const mailFailed = computed(() => { const m = agentStatus.value?.mail; return m && m.at && m.ok === false ? m : null })
+const mailOk = computed(() => { const m = agentStatus.value?.mail; return m && m.at && m.ok === true ? m : null })
+const openSettings = () => { settings.value = true; editing.value = null }
 const hostLabel = computed(() => hosts.value.find(h => h.id === serverKey.value)?.label || '')
 async function formSaved(saved) {
   const wasNew = editing.value === 'new'
@@ -107,12 +110,17 @@ onBeforeUnmount(() => { generation++; controller?.abort() })
     <section v-else-if="error" class="ws-error" role="alert" data-testid="agent-error">{{ errorText(error) }}
       <template v-if="error.code === 'trust_required'"> <router-link to="/workspaces">前往任务工作区</router-link></template>
       <p v-if="error.message && error.code !== 'agent_permission' && ERROR_TEXT[error.code]" class="ws-muted">详情：{{ error.message }}</p>
-      <AgentInstall v-if="error.code === 'protocol_mismatch'" :key="serverId" :server-id="serverId" :host="hostLabel" @recheck="load" /></section>
+      <AgentInstall v-if="error.code === 'protocol_mismatch'" :key="serverId" :server-id="serverId" :host="hostLabel" upgrade @recheck="load" /></section>
     <template v-else-if="agentStatus">
       <p v-if="notice" class="ws-error" role="alert">{{ notice }}</p>
       <div class="ws-row ws-wrap agent-statusbar" data-testid="agent-status"><span class="ws-badge good">Agent 运行中</span>
         <span>{{ agentStatus.hostname }}</span><span class="ws-muted">版本 {{ agentStatus.version }}</span><span class="ws-muted">{{ agentStatus.job_count ?? jobs.length }} 个作业</span>
-        <span class="ws-muted">正在运行 {{ (agentStatus.running || []).length }}</span><span v-if="agentStatus.draining" class="ws-badge warn">正在排空</span></div>
+        <span class="ws-muted">正在运行 {{ (agentStatus.running || []).length }}</span><span v-if="agentStatus.draining" class="ws-badge warn">正在排空</span>
+        <button data-testid="agent-upgrade" @click="showUpgrade = !showUpgrade">升级 / 重新安装 Agent</button></div>
+      <AgentInstall v-if="showUpgrade" :key="'up' + serverId" :server-id="serverId" :host="hostLabel" :installed-version="String(agentStatus.version || '')" @recheck="load" />
+      <section v-if="mailFailed" class="ws-error" role="alert" data-testid="agent-mail-failed">最近一次告警邮件发送失败：{{ mailFailed.error || '未知错误' }}（{{ formatTime(mailFailed.at) }}） <button @click="openSettings">打开告警设置</button></section>
+      <p v-if="agentStatus.alerts_configured === false" class="ws-muted" data-testid="agent-mail-unconfigured">尚未配置告警邮件 <button @click="openSettings">配置告警</button></p>
+      <p v-else-if="mailOk" class="ws-muted" data-testid="agent-mail-ok">最近发信成功 {{ formatTime(mailOk.at) }}</p>
       <section v-if="(agentStatus.firing || []).length" class="ws-error" data-testid="firing-alerts" role="alert"><strong>触发中的告警</strong>
         <ul><li v-for="a in agentStatus.firing" :key="a.key">{{ a.message }}</li></ul></section>
       <div v-if="editing || settings" data-testid="agent-form-slot">

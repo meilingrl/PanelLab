@@ -1,14 +1,15 @@
 <script setup>
-import { ref, onBeforeUnmount } from 'vue'
+import { computed, ref, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { agentApi } from '../../composables/useAgentApi'
 import { useTerminalStore } from '../../composables/useTerminalStore'
 // Uploads the Agent package to the SSH user's home folder; the user runs the one sudo command themselves.
 // PanelLab never asks for, receives or sends a sudo password.
-const props = defineProps({ serverId: { type: Number, required: true }, host: { type: String, default: '' } })
+const props = defineProps({ serverId: { type: Number, required: true }, host: { type: String, default: '' }, installedVersion: { type: String, default: '' }, upgrade: { type: Boolean, default: false } })
 const emit = defineEmits(['recheck'])
 const router = useRouter(), terminal = useTerminalStore()
 const busy = ref(false), opening = ref(false), error = ref(''), copied = ref(''), result = ref(null)
+const upgrading = computed(() => props.upgrade || !!props.installedVersion)
 let alive = true
 onBeforeUnmount(() => { alive = false })
 async function upload() {
@@ -25,7 +26,8 @@ async function openTerminal() {
 </script>
 <template>
   <section class="ws-panel agent-install" data-testid="agent-install">
-    <h3>安装服务器 Agent</h3>
+    <h3 data-testid="install-heading">{{ upgrading ? '升级 Agent' : '安装 Agent' }}</h3>
+    <p v-if="upgrading" class="ws-muted" data-testid="install-upgrade-note">升级使用同一条 sudo 命令：安装脚本会先等正在运行的作业结束，再切换到新版本；作业、运行历史、密钥和告警设置都会保留。<span v-if="installedVersion" data-testid="install-versions">当前已安装版本 {{ installedVersion }}<template v-if="result">，安装包版本 {{ result.version }}</template>。</span></p>
     <p>Agent 是运行在服务器上的小程序，负责按计划执行作业、记录结果并发送告警。安装过程如下：</p>
     <ol>
       <li>点击「上传安装包」，PanelLab 把安装包上传到你 SSH 用户的主目录（不需要密码，也不会执行任何东西）。</li>
@@ -36,6 +38,7 @@ async function openTerminal() {
     <div class="ws-actions"><button class="ws-primary" data-testid="install-upload" :disabled="busy" @click="upload">{{ busy ? '上传中…' : result ? '重新上传安装包' : '上传安装包' }}</button></div>
     <p v-if="error" class="ws-error" role="alert" data-testid="install-error">{{ error }}</p>
     <div v-if="result" data-testid="install-next">
+      <p v-if="!upgrading && result?.version" class="ws-muted">安装包版本 {{ result.version }}</p>
       <p>安装包已上传到 <code class="ws-mono">{{ result.path }}</code>。请在服务器上运行下面这条命令：</p>
       <pre class="ws-mono agent-command"><code data-testid="install-command">{{ result.command }}</code></pre>
       <div class="ws-actions"><button data-testid="install-copy" @click="copy">复制命令</button><button data-testid="install-terminal" :disabled="opening" @click="openTerminal">{{ opening ? '等待 SSH 就绪…' : '在终端打开' }}</button></div>
