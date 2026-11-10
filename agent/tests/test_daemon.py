@@ -1,0 +1,340 @@
+import errno
+import io
+import json
+import os
+import socket
+import threading
+import time
+from datetime import timedelta
+from types import SimpleNamespace
+
+import pytest
+
+from conftest import T0, FakeMailer, call, job_def, ok, quiet_readers, wait_run
+from panellab_agent import ctl, daemon
+
+
+# ------------------------------------------------------------ startup recovery
+
+def test_startup_marks_running_as_agent_lost_and_alerts(rig, tmp_path):
+    s = rig.store()
+    s.create_job(job_def(tmp_path, name="新闻简报"))
+    rid = s.insert_run("j", "schedule", T0 - timedelta(minutes=1), 1)
+    s.close()
+    a = rig.agent()
+    assert a.store.get_run(rid)["status"] == "agent_lost"
+    assert a.store.get_alert("job:j")["state"] == "firing"
+    rig.wait_mail(a)
+    subjects = rig.mailer.subjects()
+    assert any("新闻简报" in subj and "作业失败" in subj for subj in subjects), subjects
+
+
+def test_startup_reports_downtime_over_5_minutes(rig):
+    s = rig.store()
+    s.set_meta("last_alive", (T0 - timedelta(minutes=10)).isoformat())
+    s.close()
+    a = rig.agent()
+    rig.wait_mail(a)
+    (subject, body), = rig.mailer.sent
+    assert "Agent 曾停止运行" in subject
+    assert (T0 - timedelta(minutes=10)).isoformat() in body and T0.isoformat() in body
+    assert "20:00" in body  # local (Asia/Shanghai) time of T0
+
+
+def test_startup_short_gap_is_quiet(rig):
+    s = rig.store()
+    s.set_meta("last_alive", (T0 - timedelta(minutes=4)).isoformat())
+    s.close()
+    a = rig.agent()
+    rig.wait_mail(a)
+    assert rig.mailer.sent == []
+
+
+def test_startup_catch_up_uses_last_alive_and_notifies_lateness(rig, tmp_path):
+    rig.clock.advance(-3 * 3600)
+    s = rig.store()
+    s.create_job(job_def(tmp_path, schedule={"cron": ["30 11 * * *"], "tz": "UTC"},
+                         command=["/bin/true"]))
+    s.create_job(job_def(tmp_path, id="k", name="K", catch_up_window_minutes=0,
+                         schedule={"cron": ["30 11 * * *"], "tz": "UTC"}))
+    s.set_meta("last_alive", (T0 - timedelta(minutes=50)).isoformat())
+    s.close()
+    rig.clock.advance(3 * 3600)
+    a = rig.agent()
+    a.tick()
+    runs = a.store.list_runs("j")
+    assert [r["trigger"] for r in runs] == ["catch_up"]
+    missed = a.store.list_runs("k")
+    assert [r["status"] for r in missed] == ["missed"]
+    assert a.store.get_alert("job:k")["state"] == "firing"
+    wait_run(a, runs[0]["id"])
+    rig.wait_mail(a)
+    subjects = rig.mailer.subjects()
+    assert any("补跑：J 迟到 30 分钟" in s_ for s_ in subjects), subjects
+    assert any("作业错过计划：K" in s_ for s_ in subjects), subjects
+    assert a.store.get_meta("last_alive") == T0.isoformat()
+
+
+# ------------------------------------------------------------------ tick wiring
+
+def test_job_failure_alert_includes_tail_and_recovery(rig, tmp_path):
+    a = rig.agent()
+    script = "for i in $(seq 1 30); do echo line$i; done; exit ${FAIL:-0}"
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/sh", "-c", script],
+                                          env={"FAIL": "3"})))
+    wait_run(a, ok(call(a, "jobs.run_now", id="j"))["run_id"])
+    rig.wait_mail(a)
+    (subject, body), = rig.mailer.sent
+    assert "作业失败：J" in subject
+    assert "line30" in body and "line11" in body and "line10\n" not in body
+    assert "退出码：3" in body
+    ok(call(a, "jobs.update", id="j", revision=1, changes={"env": {}}))
+    wait_run(a, ok(call(a, "jobs.run_now", id="j"))["run_id"])
+    rig.wait_mail(a)
+    assert "已恢复" in rig.mailer.sent[-1][0]
+    assert a.store.get_alert("job:j")["state"] == "ok"
+
+
+def test_timeout_subject_and_alert_flags(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(
+        tmp_path, command=["/bin/sh", "-c", "echo SECRETOUT; exit 1"],
+        alert={"on_failure": True, "on_recovery": True, "include_output": False})))
+    wait_run(a, ok(call(a, "jobs.run_now", id="j"))["run_id"])
+    rig.wait_mail(a)
+    assert "SECRETOUT" not in rig.mailer.sent[0][1]
+    a.on_finish(a.store.get_job("j"), {"id": 1, "status": "timed_out", "trigger": "manual",
+                                       "attempt": 1, "exit_code": None, "output_bytes": 0,
+                                       "scheduled_for": None})
+    a.store.put_alert("job:j", "ok", T0.isoformat(), None, "x")
+    a.on_finish(a.store.get_job("j"), {"id": 1, "status": "timed_out", "trigger": "manual",
+                                       "attempt": 1, "exit_code": None, "output_bytes": 0,
+                                       "scheduled_for": None})
+    rig.wait_mail(a)
+    assert "作业超时：J" in rig.mailer.sent[-1][0]
+
+
+def test_skipped_overlap_is_recorded(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/sleep", "30"],
+                                          schedule={"cron": ["* * * * *"], "tz": "UTC"})))
+    run_id = ok(call(a, "jobs.run_now", id="j"))["run_id"]
+    rig.clock.advance(60)
+    a.tick()
+    statuses = [r["status"] for r in a.store.list_runs("j")]
+    assert statuses == ["skipped_overlap", "running"]
+    a.runner.cancel(run_id)
+
+
+def test_schedule_errors_are_reported(rig, tmp_path, capsys):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path)))
+    real = a.store.list_jobs
+
+    def broken():
+        jobs = real()
+        jobs[0]["schedule"] = {"cron": ["bad"], "tz": "UTC"}
+        return jobs
+    a.store.list_jobs = broken
+    a.tick()
+    a.tick()
+    assert a.store.get_alert("job:j")["state"] == "firing"
+    assert a.store.get_alert("job:j")["message"] == "作业计划无效：j"
+    assert capsys.readouterr().err.count("invalid schedule") == 1
+
+
+def test_watchers_feed_alerts_on_cadence(rig):
+    used = {"pct": 95}
+
+    def statvfs(path):
+        return SimpleNamespace(f_blocks=100, f_bavail=100 - used["pct"])
+    stat_lines = iter(["cpu 0 0 0 100 0", "cpu 100 0 0 100 0", "cpu 200 0 0 100 0"])
+    readers = quiet_readers(mounts=lambda: "/dev/sda1 / ext4 rw 0 0\n", statvfs=statvfs,
+                            proc_stat=lambda: next(stat_lines),
+                            meminfo=lambda: "MemTotal: 100 kB\nMemAvailable: 50 kB\n")
+    a = rig.agent(readers=readers)
+    a.tick()
+    assert a.store.get_alert("disk:/")["state"] == "firing"
+    used["pct"] = 10
+    rig.clock.advance(30)
+    a.tick()  # disk not re-checked until 60 s
+    assert a.store.get_alert("disk:/")["state"] == "firing"
+    rig.clock.advance(30)
+    a.tick()
+    assert a.store.get_alert("disk:/")["state"] == "ok"
+    assert a.cpu_watch._above_since is not None  # 100% busy samples arrived
+
+
+def test_failing_phase_does_not_stop_the_tick(rig, capsys):
+    def boom():
+        raise RuntimeError("mounts exploded")
+    a = rig.agent(readers=quiet_readers(mounts=boom))
+    rig.clock.advance(5)
+    a.tick()
+    assert a.store.get_meta("last_alive") == (T0 + timedelta(seconds=5)).isoformat()
+    assert "mounts exploded" in capsys.readouterr().err
+
+
+def test_smtp_hang_does_not_block_tick(rig, tmp_path):
+    release = threading.Event()
+    rig.mailer = FakeMailer(block=release)
+    s = rig.store()
+    s.create_job(job_def(tmp_path, schedule={"cron": ["* * * * *"], "tz": "UTC"},
+                         catch_up_window_minutes=0))
+    s.insert_run("j", "schedule", T0, 1)
+    s.close()
+    t = time.monotonic()
+    a = rig.agent()  # agent_lost alert is queued; the mailer hangs in the background
+    rig.clock.advance(3600)  # 60 missed slots -> more alerts
+    a.tick()
+    a.alerts.notify("x", "y")
+    assert time.monotonic() - t < 2.0
+    assert rig.mailer.sent == []
+    release.set()
+    rig.wait_mail(a)
+    assert rig.mailer.sent
+
+
+def test_queued_mailer_swallows_errors(capsys):
+    class Bad:
+        def send(self, s, b):
+            raise ValueError("password=hunter2")
+
+        def last_result(self):
+            return {}
+    q = daemon.QueuedMailer(Bad())
+    q.send("s", "b")
+    assert q.wait_idle(5)
+    err_text = capsys.readouterr().err
+    assert "hunter2" not in err_text and "panellab-agent" in err_text
+    q.close()
+
+
+def test_server_timezone_detection(tmp_path):
+    etc_tz = tmp_path / "timezone"
+    etc_tz.write_text("Europe/Berlin\n")
+    assert daemon.server_timezone({"TZ": "Asia/Tokyo"}, str(etc_tz), "/nope") == "Asia/Tokyo"
+    assert daemon.server_timezone({"TZ": "Bad/Zone"}, str(etc_tz), "/nope") == "Europe/Berlin"
+    link = tmp_path / "localtime"
+    os.symlink("/usr/share/zoneinfo/America/New_York", str(link))
+    assert daemon.server_timezone({}, "/nope", str(link)) == "America/New_York"
+    assert daemon.server_timezone({}, "/nope", "/nope") == "UTC"
+
+
+# ----------------------------------------------------------------- socket + ctl
+
+def _serve(agent, path):
+    server = daemon.make_server(agent, path)
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05},
+                     daemon=True).start()
+    return server
+
+
+def _ctl(monkeypatch, argv, stdin=""):
+    out, errb = io.StringIO(), io.StringIO()
+    monkeypatch.setattr("sys.stdin", io.StringIO(stdin))
+    monkeypatch.setattr("sys.stdout", out)
+    monkeypatch.setattr("sys.stderr", errb)
+    code = ctl.main(argv)
+    return code, out.getvalue(), errb.getvalue()
+
+
+def test_socket_roundtrip_via_ctl(rig, short_dir, monkeypatch):
+    a = rig.agent()
+    path = os.path.join(short_dir, "a.sock")
+    stale = socket.socket(socket.AF_UNIX)
+    stale.bind(path)  # stale socket file from a previous run is replaced
+    stale.close()
+    server = _serve(a, path)
+    try:
+        assert (os.stat(path).st_mode & 0o777) == 0o660
+        req = json.dumps({"protocol_version": 1, "op": "status", "args": {}})
+        code, out, _ = _ctl(monkeypatch, ["--socket", path], req + "\n")
+        assert code == 0 and out.endswith("\n") and out.count("\n") == 1
+        resp = json.loads(out)
+        assert resp["ok"] is True and resp["result"]["hostname"] == "testhost"
+        code, out, _ = _ctl(monkeypatch, ["--socket", path],
+                            json.dumps({"protocol_version": 9, "op": "status"}) + "\n")
+        assert code == 0 and json.loads(out)["error"]["code"] == "protocol_mismatch"
+        code, out, errt = _ctl(monkeypatch, ["--socket", path], "{oops\n")
+        assert code == 2 and out == ""
+        code, out, errt = _ctl(monkeypatch, ["--socket", path, "drain"])
+        assert code == 0 and json.loads(out)["result"]["active_count"] == 0
+        assert a.draining
+        # raw socket: garbage and oversize lines get bad_request
+        for payload in (b"nope\n", b"x" * (1024 * 1024 + 1)):
+            c = socket.socket(socket.AF_UNIX)
+            c.connect(path)
+            c.sendall(payload)
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = c.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+            c.close()
+            assert json.loads(data)["error"]["code"] == "bad_request"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ctl_exit_codes_unreachable_3_permission_4(short_dir, monkeypatch):
+    req = json.dumps({"protocol_version": 1, "op": "status", "args": {}}) + "\n"
+    missing = os.path.join(short_dir, "missing.sock")
+    code, out, errt = _ctl(monkeypatch, ["--socket", missing], req)
+    assert code == 3 and json.loads(errt)["code"] == "agent_unreachable" and out == ""
+    refused = os.path.join(short_dir, "dead.sock")
+    s = socket.socket(socket.AF_UNIX)
+    s.bind(refused)
+    s.close()  # file left behind, nobody listening
+    code, _, errt = _ctl(monkeypatch, ["--socket", refused], req)
+    assert code == 3 and json.loads(errt)["code"] == "agent_unreachable"
+
+    def denied(path):
+        raise PermissionError(errno.EACCES, "Permission denied")
+    monkeypatch.setattr(ctl, "_connect", denied)
+    code, _, errt = _ctl(monkeypatch, ["--socket", refused], req)
+    assert code == 4 and json.loads(errt)["code"] == "agent_permission"
+    code, _, _ = _ctl(monkeypatch, ["--bogus"])
+    assert code == 2
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores socket permissions")
+def test_ctl_permission_on_real_socket(rig, short_dir, monkeypatch):
+    a = rig.agent()
+    path = os.path.join(short_dir, "p.sock")
+    server = _serve(a, path)
+    try:
+        os.chmod(path, 0)
+        req = json.dumps({"protocol_version": 1, "op": "status", "args": {}}) + "\n"
+        code, _, errt = _ctl(monkeypatch, ["--socket", path], req)
+        assert code == 4 and json.loads(errt)["code"] == "agent_permission"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ctl_drain_waits_for_running_to_finish(rig, short_dir, monkeypatch, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/sleep", "30"])))
+    ok(call(a, "jobs.run_now", id="j"))
+    path = os.path.join(short_dir, "d.sock")
+    server = _serve(a, path)
+    stop = threading.Event()
+
+    def ticker():
+        while not stop.is_set():
+            a.tick()
+            time.sleep(0.02)
+    threading.Thread(target=ticker, daemon=True).start()
+    monkeypatch.setattr(ctl, "POLL_SECONDS", 0.05)
+    try:
+        code, out, errt = _ctl(monkeypatch, ["--socket", path, "drain", "--force"])
+        assert code == 0 and a.runner.active_count() == 0
+        assert "排空" in errt
+        assert a.store.list_runs("j")[0]["status"] == "cancelled"
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
