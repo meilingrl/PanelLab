@@ -334,9 +334,10 @@ def test_collector_reports_real_filesystems_and_parser_bounds_disk():
     from unittest.mock import patch
     from services.remote_probe import COLLECTOR_SCRIPT, parse_snapshot
     files = {'/proc/self/mountinfo': '25 1 0:5 / /proc rw - proc proc rw\n',
-             '/proc/self/mounts': ('/dev/sda1 / ext4 rw 0 0\nproc /proc proc rw 0 0\ntmpfs /run tmpfs rw 0 0\n'
-                                   '/dev/sdb1 /data\\040set xfs rw 0 0\n/dev/sda1 /var/lib/docker ext4 rw 0 0\n'
-                                   '/dev/loop0 /snap/core squashfs ro 0 0\n/dev/sdc1 /gone ext4 rw 0 0\n')}
+             '/proc/self/mounts': ''}
+    files_mounts = ('/dev/sda1 / ext4 rw 0 0\nproc /proc proc rw 0 0\ntmpfs /run tmpfs rw 0 0\n'
+                    '/dev/sdb1 /data\\040set xfs rw 0 0\n/dev/sda1 /var/lib/docker ext4 rw 0 0\n'
+                    '/dev/loop0 /snap/core squashfs ro 0 0\n/dev/sdc1 /gone ext4 rw 0 0\n')
     def fake_open(path, mode='r', *args, **kwargs):
         if str(path) not in files: raise FileNotFoundError(path)
         return io.StringIO(files[str(path)])
@@ -345,8 +346,21 @@ def test_collector_reports_real_filesystems_and_parser_bounds_disk():
         if path not in sizes: raise PermissionError(path)
         frsize, blocks, bfree, bavail = sizes[path]
         return os.statvfs_result((frsize, frsize, blocks, bfree, bavail, 0, 0, 0, 0, 255))
+    def run(mount_table):
+        files['/proc/self/mounts'] = mount_table
+        output = io.StringIO()
+        with patch.object(builtins, 'open', fake_open), patch.object(os, 'statvfs', statvfs), \
+             patch.object(os.path, 'isdir', lambda path: path in sizes), \
+             patch.object(os, 'scandir', side_effect=lambda path: __import__('contextlib').nullcontext(iter([]))), \
+             patch.object(subprocess, 'run', side_effect=FileNotFoundError), patch('sys.stdout', output):
+            exec(compile(COLLECTOR_SCRIPT, '<collector>', 'exec'), {'__name__': '__main__'})
+        return parse_snapshot(output.getvalue().encode())['system']['disk']
+    # Container: overlay root counts; a bind-mounted file from the host disk does not.
+    assert [d['mountpoint'] for d in run('overlay / overlay rw 0 0\n/dev/vdb1 /etc/resolv.conf ext4 rw 0 0\n')] == ['/']
+    files['/proc/self/mounts'] = files_mounts
     output = io.StringIO()
     with patch.object(builtins, 'open', fake_open), patch.object(os, 'statvfs', statvfs), \
+         patch.object(os.path, 'isdir', lambda path: path in sizes), \
          patch.object(os, 'scandir', side_effect=lambda path: __import__('contextlib').nullcontext(iter([]))), \
          patch.object(subprocess, 'run', side_effect=FileNotFoundError), patch('sys.stdout', output):
         exec(compile(COLLECTOR_SCRIPT, '<collector>', 'exec'), {'__name__': '__main__'})

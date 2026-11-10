@@ -98,9 +98,13 @@ try:
     disks, devices = [], set()
     for line in text('/proc/self/mounts', 262144).splitlines():
         bits = line.split()
-        if len(bits) < 3 or not bits[0].startswith('/dev/') or bits[2] in ('squashfs', 'iso9660', 'udf') or bits[0] in devices: continue
+        if len(bits) < 3 or bits[2] in ('squashfs', 'iso9660', 'udf') or bits[0] in devices: continue
         mount = bits[1].replace('\\040', ' ').replace('\\011', '\t').replace('\\012', '\n').replace('\\134', '\\')
-        try: info = os.statvfs(mount)
+        # Block devices, plus a container's overlay root; bind-mounted files are not filesystems to report.
+        if not (bits[0].startswith('/dev/') or (mount == '/' and bits[2] == 'overlay')): continue
+        try:
+            if not os.path.isdir(mount): continue
+            info = os.statvfs(mount)
         except OSError: continue
         if info.f_blocks <= 0: continue
         devices.add(bits[0])
