@@ -21,6 +21,7 @@ from . import PROTOCOL_VERSION
 
 DEFAULT_SOCKET = "/run/panellab-agent/agent.sock"
 POLL_SECONDS = 1.0
+TIMEOUT_SECONDS = 120
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_UNREACHABLE = 3
@@ -41,6 +42,7 @@ def _unreachable(message: str = "无法连接 PanelLab Agent") -> _Fail:
 
 def _connect(path: str) -> socket.socket:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(TIMEOUT_SECONDS)  # a timeout surfaces as agent_unreachable (exit 3)
     try:
         sock.connect(path)
     except BaseException:

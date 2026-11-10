@@ -182,6 +182,7 @@ def op_jobs_update(agent, args):
     if "schedule" in changes:
         _check_runs_eventually(agent, changes["schedule"])
     updated = agent.store.update_job(job_id, changes, revision)
+    agent.clear_schedule_alert(job_id)  # the store only saves valid schedules
     if secrets:
         agent.secrets.set_job_secrets(job_id, secrets)
     if updated["paused"]:
@@ -198,6 +199,7 @@ def op_jobs_delete(agent, args):
         agent.secrets.set_job_secrets(job_id, dict((n, None) for n in names))
     agent.alerts.observe("job:" + job_id, False, "作业已删除：%s" % job_id, "",
                          notify_recovery=False)
+    agent.clear_schedule_alert(job_id)
     return {"deleted": job_id}
 
 

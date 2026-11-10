@@ -138,9 +138,86 @@ def test_schedule_errors_are_reported(rig, tmp_path, capsys):
     a.store.list_jobs = broken
     a.tick()
     a.tick()
-    assert a.store.get_alert("job:j")["state"] == "firing"
-    assert a.store.get_alert("job:j")["message"] == "作业计划无效：j"
+    assert a.store.get_alert("job:j:schedule")["state"] == "firing"
+    assert a.store.get_alert("job:j:schedule")["message"] == "作业计划无效：j"
+    assert a.store.get_alert("job:j") is None  # failure/recovery key untouched
     assert capsys.readouterr().err.count("invalid schedule") == 1
+    rig.wait_mail(a)
+    sent = len(rig.mailer.sent)
+    a.store.list_jobs = real  # schedule valid again on a later tick
+    a.tick()
+    assert a.store.get_alert("job:j:schedule")["state"] == "ok"
+    rig.wait_mail(a)
+    assert len(rig.mailer.sent) == sent  # cleared without a recovery mail
+
+
+def test_update_clears_schedule_alert(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path)))
+    a.alerts.observe("job:j:schedule", True, "作业计划无效：j", "x", notify_firing=False)
+    ok(call(a, "jobs.update", id="j", revision=1,
+            changes={"schedule": {"cron": ["0 9 * * *"], "tz": "UTC"}}))
+    assert a.store.get_alert("job:j:schedule")["state"] == "ok"
+    rig.wait_mail(a)
+    assert rig.mailer.sent == []
+
+
+def test_second_agent_on_same_data_dir_refused_before_recovery(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, command=["/bin/sleep", "30"])))
+    run_id = ok(call(a, "jobs.run_now", id="j"))["run_id"]
+    with pytest.raises(daemon.AgentAlreadyRunning) as exc:
+        rig.agent()
+    assert str(exc.value) == "另一个 Agent 正在运行"
+    assert a.store.get_run(run_id)["status"] == "running"
+    rig.wait_mail(a)
+    assert rig.mailer.sent == []
+
+
+def test_main_exits_nonzero_when_data_dir_locked(rig, short_dir, capsys):
+    a = rig.agent()
+    code = daemon.main(["--config", rig.config, "--data-dir", rig.data,
+                        "--socket", os.path.join(short_dir, "m.sock")])
+    assert code != 0 and "另一个 Agent 正在运行" in capsys.readouterr().err
+    assert not os.path.exists(os.path.join(short_dir, "m.sock"))
+    assert not a.closed
+
+
+def test_make_server_refuses_live_socket(rig, short_dir):
+    path = os.path.join(short_dir, "live.sock")
+    live = socket.socket(socket.AF_UNIX)
+    live.bind(path)
+    live.listen(1)
+    try:
+        with pytest.raises(daemon.AgentAlreadyRunning):
+            daemon.make_server(rig.agent(), path)
+        assert os.path.exists(path)
+    finally:
+        live.close()
+
+
+def test_queued_mailer_close_drains_queue():
+    class Slow:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, s, b):
+            time.sleep(0.05)
+            self.sent.append(s)
+
+        def last_result(self):
+            return {}
+    inner = Slow()
+    q = daemon.QueuedMailer(inner)
+    for i in range(3):
+        q.send("s%d" % i, "b")
+    assert q.close(timeout=5) is True
+    assert inner.sent == ["s0", "s1", "s2"]
+    blocked = daemon.QueuedMailer(FakeMailer(block=threading.Event()))
+    blocked.send("s", "b")
+    t = time.monotonic()
+    assert blocked.close(timeout=0.2) is False
+    assert time.monotonic() - t < 2
 
 
 def test_watchers_feed_alerts_on_cadence(rig):
@@ -338,3 +415,23 @@ def test_ctl_drain_waits_for_running_to_finish(rig, short_dir, monkeypatch, tmp_
         stop.set()
         server.shutdown()
         server.server_close()
+
+
+def test_ctl_times_out_on_silent_agent(short_dir, monkeypatch):
+    path = os.path.join(short_dir, "silent.sock")
+    silent = socket.socket(socket.AF_UNIX)
+    silent.bind(path)
+    silent.listen(1)  # accepts into the backlog, never replies
+    monkeypatch.setattr(ctl, "TIMEOUT_SECONDS", 0.2)
+    try:
+        t = time.monotonic()
+        req = json.dumps({"protocol_version": 1, "op": "status", "args": {}}) + "\n"
+        code, out, errt = _ctl(monkeypatch, ["--socket", path], req)
+        assert code == 3 and json.loads(errt)["code"] == "agent_unreachable" and out == ""
+        assert time.monotonic() - t < 3
+    finally:
+        silent.close()
+
+
+def test_ctl_default_timeout_is_120s():
+    assert ctl.TIMEOUT_SECONDS == 120

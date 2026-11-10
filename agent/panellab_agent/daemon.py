@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+import errno
+import fcntl
 import json
 import os
 import queue
@@ -46,6 +48,54 @@ MAX_REQUEST = 1024 * 1024
 SOCKET_TIMEOUT_S = 30
 DRAIN_GRACE_S = 60
 MAIL_QUEUE_SIZE = 1000
+MAIL_FLUSH_TIMEOUT_S = 20
+ALREADY_RUNNING = "另一个 Agent 正在运行"
+
+
+class AgentAlreadyRunning(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__(ALREADY_RUNNING)
+
+
+def schedule_alert_key(job_id: str) -> str:
+    """Kept apart from job:<id> so schedule errors don't flap with run results."""
+    return "job:%s:schedule" % job_id
+
+
+def _acquire_lock(data_dir: str) -> int:
+    """Exclusive flock on <data_dir>/agent.lock, held until the fd is closed."""
+    fd = os.open(os.path.join(data_dir, "agent.lock"), os.O_RDWR | os.O_CREAT, 0o640)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(fd)
+        if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+            raise AgentAlreadyRunning()
+        raise
+    return fd
+
+
+def check_socket_free(path: str) -> None:
+    """Raise AgentAlreadyRunning if something is listening on `path`; unlink a stale socket."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(st.st_mode):
+        raise RuntimeError("refusing to replace non-socket file %s" % path)
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(2)
+    try:
+        probe.connect(path)
+    except OSError:
+        live = False  # refused (or otherwise dead): a stale leftover
+    else:
+        live = True
+    finally:
+        probe.close()
+    if live:
+        raise AgentAlreadyRunning()
+    os.unlink(path)
 
 
 def _log(message: str) -> None:
@@ -197,11 +247,19 @@ class QueuedMailer:
         with self._cond:
             return self._cond.wait_for(lambda: self._pending == 0, timeout)
 
-    def close(self) -> None:
+    def close(self, timeout: float = MAIL_FLUSH_TIMEOUT_S) -> bool:
+        """Wait up to `timeout` for queued mail to go out, then stop the thread.
+
+        Returns True when the queue was fully drained.
+        """
+        idle = self.wait_idle(timeout)
         try:
-            self._q.put(None, timeout=1)
+            self._q.put_nowait(None)
         except queue.Full:
             pass
+        if not idle:
+            _log("exiting with unsent alert mail")
+        return idle
 
 
 # -------------------------------------------------------------- system reads
@@ -244,6 +302,8 @@ class Agent:
         self.config_path = config_path
         self.closed = False
         os.makedirs(data_dir, exist_ok=True)
+        # Before the store or recovery: a second instance must not touch live runs.
+        self._lock_fd = _acquire_lock(data_dir)
         self._lock = threading.RLock()
         self._config = load_config(config_path)
         self.hostname = hostname or socket.gethostname()
@@ -479,8 +539,14 @@ class Agent:
             current.add((jid, message))
             if (jid, message) not in self._reported_errors:
                 _log("job %s has an invalid schedule: %s" % (jid, message))
-            self.alerts.observe("job:%s" % jid, True, "作业计划无效：%s" % jid, message)
+            self.alerts.observe(schedule_alert_key(jid), True, "作业计划无效：%s" % jid, message)
         self._reported_errors = current
+        bad = {jid for jid, _ in dec.errors}
+        for alert in self.store.firing_alerts():
+            key = alert["key"]
+            if key.startswith("job:") and key.endswith(":schedule") \
+                    and key[4:-len(":schedule")] in by_id and key[4:-len(":schedule")] not in bad:
+                self.clear_schedule_alert(key[4:-len(":schedule")])
         for jid, due in dec.missed:
             job = by_id[jid]
             self.store.record_missed(jid, due)
@@ -579,13 +645,18 @@ class Agent:
                 self._stop.wait(HEARTBEAT_LOOP_S)
         threading.Thread(target=loop, daemon=True, name="heartbeat").start()
 
-    def close(self) -> None:
+    def clear_schedule_alert(self, job_id: str) -> None:
+        self.alerts.observe(schedule_alert_key(job_id), False, "作业计划已恢复：%s" % job_id, "",
+                            notify_recovery=False)
+
+    def close(self, mail_timeout: float = MAIL_FLUSH_TIMEOUT_S) -> None:
         if self.closed:
             return
         self.closed = True
         self._stop.set()
-        self.mail_queue.close()
+        self.mail_queue.close(mail_timeout)
         self.store.close()
+        os.close(self._lock_fd)  # releases the flock
 
 
 # -------------------------------------------------------------------- socket
@@ -626,15 +697,11 @@ class _Server(socketserver.ThreadingUnixStreamServer):
 
 
 def make_server(agent: Agent, path: str) -> _Server:
-    """Bind the control socket (replacing a stale one) with mode 0660."""
-    try:
-        st = os.lstat(path)
-    except FileNotFoundError:
-        st = None
-    if st is not None:
-        if not stat.S_ISSOCK(st.st_mode):
-            raise RuntimeError("refusing to replace non-socket file %s" % path)
-        os.unlink(path)
+    """Bind the control socket (replacing a stale one) with mode 0660.
+
+    Raises AgentAlreadyRunning when another process is listening on `path`.
+    """
+    check_socket_free(path)
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
     old = os.umask(0o117)
@@ -657,7 +724,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="run in the foreground (the agent never forks; for systemd)")
     args = parser.parse_args(argv)
 
-    agent = Agent(args.config, args.data_dir, Clock())
+    try:
+        check_socket_free(args.socket)  # before recovery touches any runs
+        agent = Agent(args.config, args.data_dir, Clock())
+    except AgentAlreadyRunning:
+        _log(ALREADY_RUNNING)
+        return 1
+    try:
+        server = make_server(agent, args.socket)
+    except AgentAlreadyRunning:
+        _log(ALREADY_RUNNING)
+        agent.close()
+        return 1
     stop = threading.Event()
 
     def on_signal(signum, frame):  # only set a flag: locks may be held right now
@@ -665,7 +743,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
 
-    server = make_server(agent, args.socket)
     threading.Thread(target=server.serve_forever, daemon=True, name="control").start()
     agent.start_background()
     _log("version %s listening on %s" % (__version__, args.socket))
