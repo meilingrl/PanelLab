@@ -295,3 +295,12 @@ def test_secret_changes_keep_unchanged_and_delete_none(tmp_path):
         sec.set_job_secrets("j", {"bad name": "x"})
     with pytest.raises(StoreError):
         sec.set_job_secrets("j", {"TOKEN\n": "x"})
+
+
+def test_record_skipped_mirrors_missed(store):
+    store.create_job(make_job())
+    t1 = T0 - timedelta(minutes=1)
+    rid = store.record_skipped("backup", t1)
+    run = store.get_run(rid)
+    assert run["status"] == "skipped_overlap" and run["trigger"] == "schedule"
+    assert run["scheduled_for"] == t1.isoformat() and run["finished_at"] is not None

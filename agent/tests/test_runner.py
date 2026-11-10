@@ -420,3 +420,24 @@ def test_done_entry_survives_get_run_failure(env):
         time.sleep(0.02)
     env.store.get_run = real
     assert len(env.finished) == 1
+
+
+def test_drop_retries_discards_pending_chain(env):
+    r = env.runner()
+    job = env.job(["/bin/sh", "-c", "exit 1"], retries=2, retry_delay_seconds=5)
+    rid = r.start(job, "manual", None)
+    env.wait(r, rid)
+    assert r.running_job_ids() == {"j"}  # retry pending
+    assert r.drop_retries("other") == 0
+    assert r.drop_retries("j") == 1
+    assert r.running_job_ids() == set()
+    env.clock.advance(10)
+    r.poll()
+    assert len(env.store.list_runs("j")) == 1 and r.active_count() == 0
+
+
+def test_drop_retries_none_drops_all(env):
+    r = env.runner()
+    job = env.job(["/bin/sh", "-c", "exit 1"], retries=1, retry_delay_seconds=5)
+    env.wait(r, r.start(job, "manual", None))
+    assert r.drop_retries() == 1 and r.running_job_ids() == set()

@@ -262,6 +262,15 @@ class Runner:
             ids.update(d[0]["id"] for d in self._done)
             return ids
 
+    def drop_retries(self, job_id: Optional[str] = None) -> int:
+        """Forget pending retries for one job (or all jobs when None); return how many."""
+        with self._lock:
+            keep = [r for r in self._retries
+                    if job_id is not None and r.job["id"] != job_id]
+            dropped = len(self._retries) - len(keep)
+            self._retries = keep
+            return dropped
+
     def active_count(self) -> int:
         with self._lock:
             return len(self._active)

@@ -319,6 +319,16 @@ class Store:
                 (job_id, _iso(scheduled_for), now, now))
             return int(cur.lastrowid)
 
+    def record_skipped(self, job_id: str, scheduled_for: datetime) -> int:
+        """Record a due time skipped because the previous run was still going."""
+        now = self._now()
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO runs (job_id, trigger, status, scheduled_for, attempt, "
+                "started_at, finished_at) VALUES (?, 'schedule', 'skipped_overlap', ?, 1, ?, ?)",
+                (job_id, _iso(scheduled_for), now, now))
+            return int(cur.lastrowid)
+
     def list_runs(self, job_id: str, status: Optional[str] = None, limit: int = 50,
                   before_id: Optional[int] = None) -> List[Dict[str, Any]]:
         sql = "SELECT %s FROM runs WHERE job_id = ?" % _RUN_COLS
