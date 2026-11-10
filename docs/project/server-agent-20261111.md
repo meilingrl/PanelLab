@@ -14,17 +14,17 @@
 
 ## 自动化验证
 
-2026-11-11 在分支最新提交上重跑：
+2026-11-11 在分支最新提交上重跑（最终整体审查的修复之后）：
 
-- Agent 单元测试 227 项通过（`cd agent && python -m pytest -q`）；安装脚本静态检查 22 项通过（`scripts/tests/test_agent_install_static.py`）。
-- 后端 245 项通过；前端 13 个文件 203 项通过（含 `4d41a8d` 新增的发信结果与升级入口用例），生产构建通过。
+- Agent 单元测试 263 项通过（`cd agent && python -m pytest -q`）；安装脚本静态检查 23 项通过（`scripts/tests/test_agent_install_static.py`）。Agent 全部模块可被系统自带的 Python 3.9.6 解析，`panellab_agent.ctl --help` 在 3.9 下可运行。
+- 后端 245 项通过；前端 13 个文件 206 项通过（含 `4d41a8d` 新增的发信结果与升级入口用例），生产构建通过。
 - 时间相关用例使用可注入时钟，不真实等待。
 
 ## 真实协议验证
 
 在本机 Colima 上运行，容器只有 `panellab-agent-lab`（夹具）和 `panellab-agent-lab-mysql`（`--panel` 的隔离后端数据库），结束后均已删除；未使用用户自己的 PanelLab 实例或任何真实服务器。
 
-- `python3 scripts/verify_agent_lab.py`：54 项全部通过，结尾为 `agent lab: all checks passed`。覆盖 `install.sh` 真实安装、单元加固与重启属性、socket 与目录权限、组成员关系、非成员被拒、从恶意当前目录运行不导入其中代码、测试邮件、失败与恢复邮件、`kill -9` 后 systemd 重启并标记 `agent_lost`、升级时等待正在运行的作业、卸载与 `--purge`。
+- `python3 scripts/verify_agent_lab.py`：63 项全部通过，结尾为 `agent lab: all checks passed`。覆盖 `install.sh` 真实安装、单元加固与重启属性（`KillMode=mixed`、`TimeoutStopSec=150`）、socket 与目录权限、组成员关系、非成员被拒、从恶意当前目录运行不导入其中代码、测试邮件、失败与恢复邮件、`kill -9` 后 systemd 重启并标记 `agent_lost`、`ctl drain` 客户端被杀后排空租约约 31 秒自动失效并发通知、`systemctl restart` 时 `sleep 300` 作业约 63 秒后被记为 `cancelled` 且只发一封中断通知而无失败邮件、升级时等待正在运行的作业、卸载与 `--purge`。
 - `.venv311/bin/python scripts/verify_agent_lab.py --panel`：26 项全部通过，结尾为 `agent panel lab: all checks passed`。隔离后端只监听本机随机端口，夹具 sshd 只发布到 `127.0.0.1` 随机端口。路径为：探测指纹并与容器内 `ssh-keygen -lf` 核对 → 信任 → 未安装时返回 `agent_not_installed` → 上传安装包 → 在容器内以 `admin` 运行返回的那一条 sudo 命令 → 状态正常 → 配置 SMTP → 新建带秘密环境变量的作业 → 立即运行并读取输出（以 `panellab` 运行，秘密已注入）→ 诱发失败并在 SMTP 接收器收到失败邮件 → 成功并收到恢复邮件 → 暂停与恢复 → 修改磁盘阈值 → 测试邮件。全程检查 `GET /alerts`、`GET /jobs/{id}` 的响应和后端日志中不出现 SMTP 密码或秘密环境变量的值。
 - 隔离后端使用临时 MySQL 而不是 SQLite：`servers` 等表的 BIGINT 主键在 SQLite 中不会自增，这是已有模型的限制，与本轮无关。
 
@@ -34,7 +34,21 @@
 
 每个任务完成后都由实现者以外的审查者审查了对应提交（Agent 各模块、安装与夹具、后端、前端），审查中发现的问题已在各轮修复提交中处理并复审，例如：控制命令和安装脚本以 root 运行时不再从当前目录导入代码、安装目录按内容校验码命名、发信错误不带链式上下文、运行器在输出管道卡住时放弃并继续处理其他作业、作业表单补上 `env_file`。
 
-最终整体审查：待补充
+## 最终整体审查
+
+整条分支（`c8cb020`..`4d6615b`）由实现者以外的审查者做了一次整体审查，结论为“修复后可合并”：发现 1 个严重问题和 4 个重要问题，均已在本轮修复，另有 9 个次要问题一并处理。
+
+| 编号 | 问题 | 修复 | 提交 |
+| --- | --- | --- | --- |
+| C1 | 只调低触发线时恢复线不变，例如磁盘阈值 80% 而使用率 82% 时每次检查都触发又恢复 | 实际恢复线 = min（配置或默认值，触发线 − 5）；`alerts.configure` 拒绝不低于触发线的恢复线；告警设置页说明规则 | `4cff89f` |
+| I2 | `KillMode=control-group` 下 `systemctl stop/restart` 把作业当作失败杀掉并发失败邮件，`TimeoutStopSec=infinity` 可能拖住关机 | 改为 `KillMode=mixed`、`TimeoutStopSec=150`；守护进程停止调度、等 60 秒后取消剩余作业（记 `cancelled`、不发失败告警、发一封中断通知）；夹具验证 | `aa715dd` |
+| I3 | 排空被中断或失败后 Agent 一直停在排空状态且没有提示 | 排空改为 30 秒租约，由 `ctl drain` 续期，过期自动恢复并通知；新增 `undrain` 和 `panellab-agentctl undrain`，`install.sh` 失败时自动调用；夹具验证 | `83bf82e` |
+| I4 | Agent 重启后资源类告警可能永远停在“触发” | 启动时从已保存告警恢复 CPU、内存、磁盘的触发状态；挂载点消失时恢复 | `7c4e0cd` |
+| I5 | 删除的作业 ID 再也不能使用 | 删除时墓碑改名为 `<id>~<rowid>`，运行随之改名；清理覆盖已删除作业的运行与输出 | `ab0f478` |
+| M1–M7 | 排空在启动循环中途开始会丢失到期时间；丢弃重试链时不报告最后一次失败；`secrets.json` 损坏留下“运行中”记录；未发触发信却发恢复信；补跑通知不看 `on_failure`；`status` 缺心跳结果；存储层错误信息为英文 | 逐项修复 | `2e412f9` |
+| M6、M8、M9 | 页面不显示心跳失败；负退出码直接显示；`env_file` 未去除首尾空格 | 状态栏显示「心跳请求失败（时间）」；显示为「信号 n」；保存前去除空格 | `aeadd57` |
+
+用户指南同步更新了同版本重装也会排空、SSH 告警“达到 30 次”、停止服务时中断作业的行为，以及迁移示例（先列出实际定时器、推荐另行部署、发送作业先不设计划、两个准备作业并行的条件）。
 
 ## 未验证
 

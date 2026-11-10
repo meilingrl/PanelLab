@@ -6,8 +6,8 @@ Run: python3 scripts/verify_agent_lab.py [--keep]
      .venv311/bin/python scripts/verify_agent_lab.py --panel   (needs the backend requirements)
 
 --panel drives the same fixture through PanelLab's own backend API instead: a backend from
-backend/ is started with this interpreter on a random loopback port with a temporary SQLite
-database and its own SECRET_KEY, logs in to the fixture over SSH as admin (fixture-only
+backend/ is started with this interpreter on a random loopback port with a disposable MySQL
+database (below) and its own SECRET_KEY, logs in to the fixture over SSH as admin (fixture-only
 password; sshd is published only on a random 127.0.0.1 port), pins the host key, uploads the
 bundle, and the returned sudo command is run inside the container as admin (standing in for
 the user typing it). Its database is a disposable MySQL container, panellab-agent-lab-mysql

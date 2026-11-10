@@ -96,6 +96,8 @@ Mac: PanelLab（Vue + FastAPI，本地启动器）
   - 作业是守护进程的子进程，与它同属一个 cgroup。
   - 意外崩溃时 systemd 会同时结束正在运行的作业。这类运行一律标为 `agent_lost` 并告警，不尝试让作业在守护进程重启后继续存活。
   - 计划内的重启和升级，先“排空”：`install.sh` 先调用 `panellab-agentctl drain`，Agent 不再启动新运行，等正在运行的作业结束（最多等其各自的超时时间，可加 `--force` 跳过），然后才重启。
+  - 排空是一个 30 秒的租约（R23，最终审查后补充）：`drain` 设定租约，`ctl drain` 在等待期间每次轮询（不超过 10 秒）重发以续期；无人续期时 Agent 自动退出排空、写日志并发通知“Agent 已退出排空状态”。另有 `undrain` 操作和 `panellab-agentctl undrain`，`install.sh` 在请求过排空后失败时由 EXIT trap 调用。排空期间 `last_scheduled` 不前进，退出排空后按正常的补跑窗口和错过规则处理到期的运行。
+  - `systemctl stop` / `restart` / 关机（R22，最终审查后补充）：单元使用 `KillMode=mixed`、`TimeoutStopSec=150`，SIGTERM 只发给守护进程。守护进程停止调度，给正在运行的作业最多 60 秒自行结束，之后经运行器取消剩下的（进程组 SIGTERM，30 秒后 SIGKILL），记为 `cancelled`，输出末尾加一行 `[Agent 停止，作业被中断]`，不发失败告警，只发一封“Agent 停止时中断了作业”列出作业名和运行编号；随后在 20 秒内清空发信队列并退出。守护进程退出后 systemd 对 cgroup 中剩余进程发 SIGKILL。
 - **Agent 停机告警**：Agent 启动时，若发现上次运行留下的最后心跳与现在相隔超过 5 分钟，就发一封“Agent 曾停止运行：从 X 到 Y”。这样补跑和错过都有迹可查。
 - **只用 Python 标准库**（sqlite3、smtplib、json、socket 等），服务器无需 pip。cron 表达式自行实现标准 5 字段解析，含时区。要求 Python ≥ 3.9（需要 `zoneinfo`）。
 
@@ -146,8 +148,11 @@ Mac: PanelLab（Vue + FastAPI，本地启动器）
   - 最后一次尝试（重试用尽后）失败或超时，触发；之后一次成功，恢复。
   - 计划时间过去 15 分钟仍未开始（例如 Agent 停机后又未补跑），记为 `missed`。
 - 资源类（阈值可在 PanelLab 中修改）：
-  - 每个真实文件系统的使用率超过 90% 时触发，回落到 85% 以下时恢复。排除 tmpfs、overlay、squashfs 等伪文件系统。
+  - 每个真实文件系统的使用率超过 90% 时触发，回落到 85% 以下时恢复。排除 tmpfs、overlay、squashfs 等伪文件系统。触发中的挂载点从挂载列表中消失时也算恢复。
   - CPU：每 30 秒从 `/proc/stat` 采样一次，连续 10 分钟每次都超过 95% 时触发，连续 5 分钟低于 90% 时恢复。
+  - 实际恢复线（R21，最终审查后补充）= min（配置的恢复线或默认值，触发线 − 5），磁盘对应 `disk_recover_percent`，CPU / 内存对应 `recover_below_percent`，避免调低触发线后在阈值附近反复触发和恢复。`alerts.configure` 拒绝（`invalid`）显式设置的、不低于对应触发线的恢复线。
+  - Agent 启动时，`cpu`、`mem`、`disk:<挂载点>` 的触发状态从已保存的告警恢复，之后照常判断是否恢复。
+  - 恢复邮件只在触发时确实发过信的情况下发送。
   - 内存：计算方式同 CPU，使用率 = 1 − MemAvailable/MemTotal。
 - SSH 登录类（用户标为可选，放在第一版最后一步，时间不够可推迟）：
   - 统计 10 分钟内 sshd 认证失败次数，超过 30 次触发；信中列出次数最多的来源 IP，最多 5 个。
@@ -170,8 +175,9 @@ Mac: PanelLab（Vue + FastAPI，本地启动器）
 - 通道的权限边界就是“能以 panellab 组成员身份登录这台服务器”，不另设令牌。
 - 协议带 `protocol_version`。PanelLab 遇到不兼容的版本时，提示用户升级 Agent，不去猜。
 - 操作：
-  - 读取类：`status`（Agent 版本、启动时间、告警配置摘要、当前触发的告警、最后一次发信结果）、`jobs.list`、`jobs.get`、`runs.list`、`runs.output`（支持偏移量和跟随）。
-  - 写入类：`jobs.create`、`jobs.update`（需带 revision）、`jobs.delete`、`jobs.run_now`、`jobs.pause`、`jobs.resume`、`runs.cancel`、`alerts.configure`、`alerts.test_email`。
+  - 读取类：`status`（Agent 版本、启动时间、告警配置摘要、当前触发的告警、最后一次发信结果、最后一次心跳结果 `heartbeat: {configured, at, ok, error}`）、`jobs.list`、`jobs.get`、`runs.list`、`runs.output`（支持偏移量和跟随）。
+  - 写入类：`jobs.create`、`jobs.update`（需带 revision）、`jobs.delete`、`jobs.run_now`、`jobs.pause`、`jobs.resume`、`runs.cancel`、`alerts.configure`、`alerts.test_email`、`drain`、`undrain`。
+  - 删除作业（R24，最终审查后补充）：作业记录改名为 `<id>~<rowid>` 留作墓碑，它的运行在同一事务中跟着改名，原 ID 可以重新创建；旧运行仍可按运行编号读取，清理规则同样覆盖已删除作业的运行和输出文件。
 - 秘密不出服务器：`status` 和 `alerts` 的读取结果只返回“已设置密码”，不返回密码本身。
 
 ## PanelLab（Mac）侧
