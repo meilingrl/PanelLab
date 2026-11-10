@@ -9,7 +9,7 @@
 | Agent（`agent/panellab_agent/`，仅标准库，兼容 Python 3.9） | 5 字段 cron 与时区；作业、运行、告警状态与秘密分开存放（SQLite 与 0600 的 `secrets.json`）；调度决策（按时、补跑窗口内合并补跑、超窗记 `missed`、重叠跳过）；运行器（argv 不经 shell、进程组超时 SIGTERM→SIGKILL、10 MiB 输出上限、失败和超时重试）；告警状态机（触发与恢复各一封、24 小时提醒）、SMTP 发信队列；磁盘、CPU、内存、SSH 登录失败检查与心跳；Unix socket 上的 JSON 控制协议与 `panellab-agentctl`；启动时把中断的运行标为 `agent_lost`、报告停机时段 |
 | 安装（`agent/install.sh`、`agent/systemd/`） | 创建 `panellab` 系统用户（无 shell、不在 sudoers、不动已有 `agent` 账户）；systemd 单元带 `Restart=always` 和不限路径的加固项；升级前排空、`--force`、`--uninstall [--purge]`；以 root 运行时不从当前目录导入代码 |
 | 后端（`backend/services/agent_client.py`、`backend/routers/agent.py`） | 经固定指纹 SSH 执行 `panellab-agentctl`，`/api/servers/{id}/agent/...` 下的作业、运行、输出、告警和安装路由；错误统一映射为 `agent_not_installed`、`agent_permission`、`agent_unreachable` 等；安装包按内容校验码命名后经 SFTP 上传，只返回一条由用户自己运行的 sudo 命令 |
-| 前端（「服务器 Agent」页面与 `components/agent/`） | 状态、触发中的告警、作业列表与详情、运行历史与输出跟随；作业表单（argv 每行一个参数、`env_file`、只写的秘密环境变量、由 Agent 计算的接下来 3 次运行时间）；告警设置与测试邮件；未安装和协议不兼容时的安装指引 |
+| 前端（「服务器 Agent」页面与 `components/agent/`） | 状态、触发中的告警、作业列表与详情、运行历史与输出跟随；作业表单（argv 每行一个参数、`env_file`、只写的秘密环境变量、由 Agent 计算的接下来 3 次运行时间）；告警设置与测试邮件；未安装和协议不兼容时的安装指引；状态栏显示最近一次告警邮件的发送失败或「尚未配置告警邮件」，已安装时提供「升级 / 重新安装 Agent」（`4d41a8d`） |
 | 真实协议验证（`scripts/verify_agent_lab.py`、`scripts/fixtures/agent_systemd/`） | 以 systemd 为 PID 1 的 Debian 夹具，内含 sshd 和本地 SMTP 接收器；默认模式直接验证安装与守护进程，`--panel` 模式经 PanelLab 后端 API 走完整条路径 |
 
 ## 自动化验证
@@ -17,7 +17,7 @@
 2026-11-11 在分支最新提交上重跑：
 
 - Agent 单元测试 227 项通过（`cd agent && python -m pytest -q`）；安装脚本静态检查 22 项通过（`scripts/tests/test_agent_install_static.py`）。
-- 后端 245 项通过；前端 13 个文件 201 项通过，生产构建通过。
+- 后端 245 项通过；前端 13 个文件 203 项通过（含 `4d41a8d` 新增的发信结果与升级入口用例），生产构建通过。
 - 时间相关用例使用可注入时钟，不真实等待。
 
 ## 真实协议验证
@@ -43,8 +43,6 @@
 - SSH 暴力登录告警只在单元测试中用模拟的日志行验证，夹具中没有用真实的大量失败登录触发。
 - STARTTLS 和 SSL 发信路径没有实际执行过：单元测试只对本地无加密接收器发信并校验安全方式取值，夹具同样使用无加密的本地接收器，也未连接真实邮件服务商。
 - 心跳只在单元测试中验证，未连接真实心跳服务。
-- 页面只在「发送测试邮件」时显示发信失败原因；Agent 状态中的最后一次发信结果尚未在页面上展示。
-- 已安装且协议兼容时，页面没有升级入口（见用户指南“升级”一节的手动方式）。
 
 ## 边界
 
