@@ -339,7 +339,7 @@ it('C: QQ address payload is exactly the agreed shape', async () => {
 it('C: extra recipients, comma or line separated', async () => {
   noSmtp(); const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
   await t(w, 'smtp-on').setValue(true); await t(w, 'smtp-email').setValue('a@163.com')
-  expect(w.text()).toContain('网页版邮箱 → 设置 → POP3/SMTP/IMAP → 开启 SMTP 服务并获取授权码')
+  expect(t(w, 'smtp-hint').text()).toBe('在邮箱网页版的设置中开启 SMTP 服务并获取授权码')
   await t(w, 'smtp-to').setValue('a@163.com, b@x.com\nc@x.com')
   await t(w, 'smtp-password-mode').setValue('set'); await t(w, 'smtp-password').setValue('P')
   await t(w, 'alerts-save').trigger('click'); await flushPromises()
@@ -375,4 +375,38 @@ it('C: turning mail off still sends smtp null', async () => {
   const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
   await t(w, 'smtp-on').setValue(false); await t(w, 'alerts-save').trigger('click'); await flushPromises()
   expect(body(0, 'PUT').smtp).toBeNull()
+})
+
+const qqCustom = { host: 'smtp.qq.com', port: 587, security: 'starttls', username: 'custom-user', from: 'u@qq.com', to: ['u@qq.com'] }
+it('C fix: editing the local part keeps a custom config; a different preset domain applies', async () => {
+  routes['GET /api/servers/71/agent/alerts'] = () => response(alertsView({ smtp: qqCustom }))
+  const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  await t(w, 'smtp-email').setValue('uu@qq.com')
+  expect(t(w, 'smtp-host').element.value).toBe('smtp.qq.com'); expect(t(w, 'smtp-port').element.value).toBe('587'); expect(t(w, 'smtp-security').element.value).toBe('starttls'); expect(t(w, 'smtp-username').element.value).toBe('custom-user')
+  expect(t(w, 'smtp-password-mode').element.value).toBe('keep')
+  await t(w, 'smtp-email').setValue('uu@163.com')
+  expect(t(w, 'smtp-host').element.value).toBe('smtp.163.com'); expect(t(w, 'smtp-port').element.value).toBe('465'); expect(t(w, 'smtp-username').element.value).toBe('uu@163.com')
+})
+
+it('C fix: changing provider with a stored password requires a new code', async () => {
+  routes['GET /api/servers/71/agent/alerts'] = () => response(alertsView({ smtp: { host: 'smtp.qq.com', port: 465, security: 'ssl', username: 'u@qq.com', from: 'u@qq.com', to: ['u@qq.com'] } }))
+  const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  await t(w, 'smtp-email').setValue('v@qq.com'); expect(t(w, 'smtp-password-mode').element.value).toBe('keep')
+  await t(w, 'smtp-email').setValue('v@163.com')
+  expect(t(w, 'smtp-password-mode').element.value).toBe('set'); expect(w.text()).toContain('更换了邮件服务商，请重新填写授权码')
+  await t(w, 'alerts-save').trigger('click'); expect(t(w, 'alerts-error').text()).toContain('更换了邮件服务商，请重新填写授权码')
+  await t(w, 'smtp-password-mode').setValue('keep'); await t(w, 'alerts-save').trigger('click'); expect(t(w, 'alerts-error').text()).toContain('更换了邮件服务商')
+  expect(fetch.mock.calls.filter(([, o]) => o?.method === 'PUT')).toHaveLength(0)
+  await t(w, 'smtp-password-mode').setValue('set'); await t(w, 'smtp-password').setValue('new'); await t(w, 'alerts-save').trigger('click'); await flushPromises()
+  expect(body(0, 'PUT').smtp).toMatchObject({ host: 'smtp.163.com', password: 'new' })
+})
+
+it('C fix: recipients are deduped and split on whitespace; bad address in simple view', async () => {
+  noSmtp(); const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  await t(w, 'smtp-on').setValue(true)
+  for (const bad of ['abc', 'abc@']) { await t(w, 'smtp-email').setValue(bad); await t(w, 'alerts-save').trigger('click'); expect(t(w, 'alerts-error').text()).toContain('请填写有效的邮箱地址') }
+  await t(w, 'smtp-email').setValue('a@qq.com'); await t(w, 'smtp-to').setValue('a@qq.com b@x.com, a@qq.com\nb@x.com')
+  await t(w, 'smtp-password-mode').setValue('set'); await t(w, 'smtp-password').setValue('P')
+  await t(w, 'alerts-save').trigger('click'); await flushPromises()
+  expect(body(0, 'PUT').smtp.to).toEqual(['a@qq.com', 'b@x.com'])
 })
