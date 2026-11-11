@@ -23,7 +23,7 @@
    - 把 `panellab` 加入 `adm` 组（只为读取 SSH 登录失败记录），把你的 SSH 用户加入 `panellab` 组；
    - 把程序装到 `/opt/panellab-agent/`，数据放在 `/var/lib/panellab-agent/`，配置放在 `/etc/panellab-agent/`；
    - 安装并启动 systemd 服务 `panellab-agent`（崩溃后自动重启）。
-4. 运行完成后，**重新连接 SSH**（新开终端或重新登录），新加的组才会生效；然后在页面点「重新检查」。PanelLab 每次操作都会新建 SSH 连接，所以页面这边通常直接就能用。
+4. 运行完成后，**重新连接 SSH**（新开终端或重新登录），新加的组才会生效；然后在页面点「重新检查」。PanelLab 会复用 SSH 连接；安装后遇到权限错误时会自动用新的 SSH 登录重试一次，所以页面这边通常直接就能用。
 
 ## 升级
 
@@ -115,6 +115,8 @@ Agent 已安装时，点状态栏上的「升级 / 重新安装 Agent」，会�
 | --- | --- |
 | `agent_not_installed` | 这台服务器上没有 `panellab-agentctl`。按“安装”一节上传并运行命令。 |
 | `agent_permission` | 你的 SSH 用户还不在 `panellab` 组里，或者组权限还没生效。重新登录 SSH 后再试；用 `id` 确认输出里有 `panellab`，没有就重新运行安装命令。 |
+| `connection_refused_by_server`（「服务器暂时拒绝了新的 SSH 连接」） | 服务器正在限制新的 SSH 连接，PanelLab 已经自动等待并重试过一次。稍等片刻再试即可。经常出现说明短时间内新建的连接太多（可能还有别的程序在连这台服务器），在服务器上用 `sudo journalctl -u ssh -n 100`（有的系统是 `-u sshd`）查看是否有 penalty 或 MaxStartups 相关记录。 |
+| `remote_busy`（「服务器上的 SSH 请求过多」） | 同一条 SSH 连接上同时进行的请求已达上限，新的请求排队超过 30 秒。通常是有很慢的操作占着连接；等它们结束后再试。 |
 | `agent_unreachable` | 连不上 Agent 的 socket，多半是服务没在运行。在服务器上运行 `sudo systemctl status panellab-agent` 和 `sudo journalctl -u panellab-agent -n 50` 查看原因，`sudo systemctl restart panellab-agent` 重启。 |
 | 状态栏显示「正在排空」，或操作报 `draining` | 有一次升级或卸载在等待作业结束，期间不启动新运行。排空由安装脚本持续续期：脚本失败时会立即恢复调度；脚本被强行中断时，Agent 在 30 秒内自动退出排空并发一封「Agent 已退出排空状态」通知。也可以在服务器上运行 `panellab-agentctl undrain` 立即恢复。 |
 | 用 `systemctl restart` / `stop` 或重启服务器时有作业在运行 | Agent 停止调度，给正在运行的作业最多 60 秒自行结束，之后中断剩下的（记为「已取消」，输出末尾有 `[Agent 停止，作业被中断]`，不发失败告警），并发一封「Agent 停止时中断了作业」通知列出它们。计划内的升级请用本页的升级入口或 `install.sh`，它们会先等作业结束。 |
