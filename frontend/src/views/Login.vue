@@ -1,4 +1,5 @@
 <script setup>
+import { clearAgentCache } from "../composables/agentCache";
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { initTheme, getTheme, toggleTheme } from "../theme";
@@ -61,6 +62,7 @@ function parseHash() {
   const token = params.get("token");
   const err = params.get("error");
   if (token) {
+    clearAgentCache();
     localStorage.setItem("panel_token", token);
     window.location.hash = "";
     router.replace(route.query.redirect || "/workspaces");
@@ -93,7 +95,10 @@ const hasPhone = () => /^1\d{10}$/.test(phone.value);
 const hasCode = () => smsCode.value.length >= 6;
 
 function setTokenAndRedirect(data) {
-  if (data.token) localStorage.setItem("panel_token", data.token);
+  if (data.token) {
+    clearAgentCache();
+    localStorage.setItem("panel_token", data.token);
+  }
   const redirect = route.query.redirect || "/workspaces";
   router.push(redirect);
 }

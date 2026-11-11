@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { getTheme, toggleTheme } from "../theme";
 import { useTerminalStore } from "../composables/useTerminalStore";
+import { clearAgentCache } from "../composables/agentCache";
 
 const router = useRouter();
 const route = useRoute();
@@ -40,6 +41,7 @@ function isActive(path) {
 
 function onLogout() {
   terminalStore.closeAllSessions();
+  clearAgentCache();
   localStorage.removeItem("panel_token");
   router.push("/login");
 }

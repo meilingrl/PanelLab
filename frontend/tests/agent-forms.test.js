@@ -1,4 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
+import { clearAgentCache } from '../src/composables/agentCache'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import JobForm from '../src/components/agent/JobForm.vue'
 import AlertSettings from '../src/components/agent/AlertSettings.vue'
@@ -21,6 +22,7 @@ const alertsView = (over = {}) => ({ smtp: { host: 'smtp.x.com', port: 587, secu
 let wrappers = [], routes
 const body = (i = 0, method) => JSON.parse(fetch.mock.calls.filter(([, o]) => !method || o?.method === method)[i][1].body)
 beforeEach(() => {
+  clearAgentCache()
   routes = {}; push.mockClear(); createSession.mockClear()
   vi.stubGlobal('localStorage', { getItem: () => 'fixture-token' })
   vi.stubGlobal('fetch', vi.fn(async (url, o = {}) => {

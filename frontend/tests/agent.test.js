@@ -1,6 +1,10 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import Agent from '../src/views/dashboard/Agent.vue'
+import DashboardLayout from '../src/views/DashboardLayout.vue'
+import { createRouter, createMemoryHistory } from 'vue-router'
+import { clearAgentCache, getAgentCache } from '../src/composables/agentCache'
+vi.mock('../src/theme', () => ({ getTheme: () => 'light', toggleTheme: () => 'dark' }))
 
 const RouterLink = { props: ['to'], template: '<a :href="to"><slot /></a>' }
 const response = (data, ok = true, status = ok ? 200 : 503) => ({ ok, status, json: async () => data })
@@ -15,6 +19,7 @@ let wrappers = [], routes
 const calls = () => fetch.mock.calls.map(([u, o]) => `${o?.method || 'GET'} ${u}`)
 const count = (c) => calls().filter(x => x === c).length
 beforeEach(() => {
+  clearAgentCache()
   routes = {}
   vi.stubGlobal('localStorage', { getItem: () => 'fixture-token' })
   vi.stubGlobal('fetch', vi.fn(async (url, o = {}) => {
@@ -252,4 +257,86 @@ it('B1: an in-flight poll refresh settling after unmount does not re-arm the pol
   release(); await flushPromises()
   await vi.advanceTimersByTimeAsync(30000); await flushPromises()
   expect(count('GET /api/servers/71/agent')).toBe(before)
+})
+
+const enriched = (over = {}) => job({ last_run: { run_id: 5, status: 'failed', trigger: 'schedule', started_at: '2026-11-11T03:00:00Z', ended_at: '2026-11-11T03:00:12Z' },
+  next_run: { utc: 'u', local: '2026-11-12T03:00:00+08:00' }, ...over })
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
+
+it('C1: jobs carrying last_run and next_run need no per-job preview or runs requests', async () => {
+  routes['GET /api/servers/71/agent/jobs'] = () => response({ jobs: [enriched(), enriched({ id: 'b2', name: '第二个', last_run: null, next_run: null })] })
+  const w = await mountAgent()
+  const rows = w.findAll('[data-testid="job-row"]')
+  expect(rows[0].text()).toContain('失败'); expect(rows[0].text()).toContain('12 秒'); expect(rows[0].text()).toContain('2026-11-12 03:00')
+  expect(rows[1].text()).toContain('尚未运行'); expect(rows[1].text()).toContain('无')
+  expect(calls().filter(c => c.includes('schedule-preview') || c.includes('/runs'))).toEqual([])
+})
+
+it('C1: an old Agent without the keys still gets per-job preview and runs?limit=1', async () => {
+  const w = await mountAgent()
+  expect(w.get('[data-testid="job-row"]').text()).toContain('2026-11-12 03:00')
+  expect(count('POST /api/servers/71/agent/schedule-preview')).toBe(1)
+  expect(calls().filter(c => c.includes('/jobs/backup/runs?limit=1')).length).toBe(1)
+})
+
+it('C2: returning to the page shows cached jobs before any request resolves, then updates', async () => {
+  const w1 = await mountAgent(); expect(w1.text()).toContain('每日备份')
+  w1.unmount(); wrappers = []
+  const gate = deferred()
+  routes['GET /api/servers/71/agent'] = async () => { await gate.promise; return response(status({ hostname: 'new-host' })) }
+  routes['GET /api/servers/71/agent/jobs'] = async () => { await gate.promise; return response({ jobs: [job({ name: '新名称' })] }) }
+  const w2 = mount(Agent, { global: { stubs: { RouterLink, 'router-link': RouterLink } } }); wrappers.push(w2)
+  await Promise.resolve()
+  expect(w2.get('[data-testid="job-row"]').text()).toContain('每日备份')
+  expect(w2.text()).toContain('更新中…')
+  gate.resolve(); await flushPromises()
+  expect(w2.text()).toContain('新名称'); expect(w2.text()).not.toContain('每日备份'); expect(w2.text()).not.toContain('更新中…')
+})
+
+it('C2: a failed background refresh keeps the cached view and shows the error above it', async () => {
+  const w1 = await mountAgent(); w1.unmount(); wrappers = []
+  routes['GET /api/servers/71/agent'] = () => failure('remote_timeout', 'x', 504)
+  const w2 = await mountAgent()
+  expect(w2.get('[data-testid="job-row"]').text()).toContain('每日备份')
+  const alert = w2.get('p.ws-error[role="alert"]'); expect(alert.text()).toContain('连接服务器超时')
+  expect(w2.find('[data-testid="agent-error"]').exists()).toBe(false)
+  expect(w2.text()).not.toContain('更新中…')
+})
+
+it('C3: alert settings are requested only when 告警设置 is opened', async () => {
+  routes['GET /api/servers/71/agent/alerts'] = () => response({ smtp: null, smtp_password: '未设置', thresholds: {}, heartbeat_url: null, ssh_enabled: true })
+  const w = await mountAgent()
+  expect(calls().some(c => c.endsWith('/alerts'))).toBe(false)
+  await w.findAll('button').find(b => b.text() === '告警设置').trigger('click'); await flushPromises()
+  expect(count('GET /api/servers/71/agent/alerts')).toBe(1)
+})
+
+it('C4: a refresh sends status and jobs in parallel', async () => {
+  const gate = deferred()
+  routes['GET /api/servers/71/agent'] = async () => { await gate.promise; return response(status()) }
+  const w = mount(Agent, { global: { stubs: { RouterLink, 'router-link': RouterLink } } }); wrappers.push(w)
+  await flushPromises()
+  expect(count('GET /api/servers/71/agent/jobs')).toBe(1)   // sent while status is still pending
+  gate.resolve(); await flushPromises()
+})
+
+it('C5: logout clears the cache', async () => {
+  await mountAgent()
+  expect(getAgentCache(71)?.jobs?.length).toBe(1)
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<i/>' } }, { path: '/login', component: { template: '<i/>' } }] })
+  vi.stubGlobal('localStorage', { getItem: () => 'fixture-token', removeItem: () => {} })
+  const layout = mount(DashboardLayout, { global: { plugins: [router], stubs: { RouterView: true } } }); wrappers.push(layout); await flushPromises()
+  await layout.findAll('button').find(b => b.text() === '退出').trigger('click'); await flushPromises()
+  expect(getAgentCache(71)).toBeUndefined()
+})
+
+it('C6: returning to the page selects the last selected server', async () => {
+  routes['GET /api/servers/72/agent'] = () => response(status({ hostname: 'web-host' }))
+  routes['GET /api/servers/72/agent/jobs'] = () => response({ jobs: [enriched({ id: 'web-job', name: '网站任务' })] })
+  const w1 = await mountAgent()
+  await w1.get('#agent-server').setValue('server:72'); await flushPromises()
+  w1.unmount(); wrappers = []
+  const w2 = await mountAgent()
+  expect(w2.get('#agent-server').element.value).toBe('server:72')
+  expect(w2.text()).toContain('网站任务')
 })

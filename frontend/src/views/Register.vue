@@ -1,4 +1,5 @@
 <script setup>
+import { clearAgentCache } from "../composables/agentCache";
 import { ref, onMounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { initTheme, getTheme, toggleTheme } from "../theme";
@@ -85,6 +86,7 @@ async function onSubmit() {
       return;
     }
     if (data.token) {
+      clearAgentCache();
       localStorage.setItem("panel_token", data.token);
     }
     const redirect = route.query.redirect || "/";
