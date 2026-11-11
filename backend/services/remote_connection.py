@@ -70,6 +70,8 @@ def _connect_error(exc):
     exception text never reaches the client or the log.
     """
     if isinstance(exc, paramiko.AuthenticationException):
+        if str(exc) == 'Authentication timeout.':  # paramiko's fixed auth-wait text
+            return TIMED_OUT
         return 'authentication_failed', 'SSH 认证失败'
     if isinstance(exc, socket.gaierror):
         return 'connection_failed', '无法解析服务器地址'
@@ -79,6 +81,8 @@ def _connect_error(exc):
         return 'connection_failed', '无法连接服务器的 SSH 端口'
     if isinstance(exc, (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
         return REFUSED
+    if isinstance(exc, paramiko.SSHException) and str(exc) == 'Negotiation timed out.':  # older paramiko kex timeout
+        return TIMED_OUT
     if isinstance(exc, paramiko.SSHException) and str(exc).startswith('Error reading SSH protocol banner'):
         # sshd throttling (MaxStartups, PerSourcePenalties) closes before its banner.
         cause = exc.__cause__ or exc.__context__
@@ -116,6 +120,9 @@ def _start(row):
             transport.auth_timeout = CONNECT_TIMEOUT
             transport.channel_timeout = CONNECT_TIMEOUT
             transport.start_client(timeout=CONNECT_TIMEOUT)
+            if not getattr(transport, 'initial_kex_done', True):
+                # paramiko 5 returns from start_client on timeout without raising.
+                raise socket.timeout()
         return transport
     except BaseException:
         if transport is not None:
@@ -129,7 +136,10 @@ def _start(row):
 
 
 def _with_retry(attempt):
-    """Retry once, after RETRY_DELAY, when the server refused a new connection."""
+    """Retry once, after RETRY_DELAY, when the server refused a new connection.
+
+    An EOF during authentication counts as a refusal, so credentials may be sent once more.
+    """
     try:
         return attempt()
     except HTTPException as exc:
@@ -256,7 +266,17 @@ class _Entry:
 _pool = {}
 _pool_lock = threading.Lock()
 _login_locks = {}
+_logins_in_flight = {}
 _sweeper = None
+LOGIN_WAIT_TIMEOUT = 120  # longer than a login plus its retry (2 x 3 x CONNECT_TIMEOUT + RETRY_DELAY)
+
+
+class _LoginAttempt:
+    """One pooled login for a key. Callers queued behind it share its outcome."""
+    __slots__ = ('fingerprint', 'done', 'error')
+
+    def __init__(self, fingerprint):
+        self.fingerprint, self.done, self.error = fingerprint, threading.Event(), None
 
 
 def _credential_fingerprint(db, row, pin):
@@ -290,8 +310,10 @@ def _acquire(key, fingerprint):
         entry = _pool.get(key)
         if entry is not None:
             now = _clock()
+            # A transport busy with a long request is not idle, whatever last_used says.
+            idle = entry.users == 0 and now - entry.last_used >= IDLE_SECONDS
             if (entry.fingerprint == fingerprint and entry.transport.is_active()
-                    and now - entry.created < MAX_AGE_SECONDS and now - entry.last_used < IDLE_SECONDS):
+                    and now - entry.created < MAX_AGE_SECONDS and not idle):
                 entry.users += 1
                 entry.last_used = now
                 return entry
@@ -462,6 +484,59 @@ class _RequestClient(paramiko.SSHClient):
         self._close_channels()
 
 
+def _login_shared(db, key, row, pin, fingerprint):
+    """Pooled entry (users already counted) from at most one login in flight per key.
+
+    Callers that queued behind a login get its result: the pooled transport or the same
+    error, without connecting themselves. A caller arriving after the outcome was
+    published starts a fresh attempt.
+    """
+    while True:
+        entry = _acquire(key, fingerprint)
+        if entry is not None:
+            return entry
+        with _pool_lock:
+            attempt = _logins_in_flight.get(key)
+            leader = attempt is None
+            if leader:
+                attempt = _logins_in_flight[key] = _LoginAttempt(fingerprint)
+        if leader:
+            try:
+                with _login_lock(key):  # also serialises against dedicated logins
+                    return _put(key, fingerprint, _login(db, row, pin))
+            except HTTPException as exc:
+                attempt.error = (exc.status_code, exc.detail)
+                raise
+            except BaseException:
+                attempt.error = (503, {'code': 'connection_failed', 'message': 'SSH 连接失败'})
+                raise
+            finally:
+                with _pool_lock:
+                    if _logins_in_flight.get(key) is attempt:
+                        del _logins_in_flight[key]
+                attempt.done.set()
+        if not attempt.done.wait(LOGIN_WAIT_TIMEOUT):
+            fail(*TIMED_OUT, 503)
+        if attempt.error is not None and attempt.fingerprint == fingerprint:
+            status, detail = attempt.error
+            raise HTTPException(status_code=status, detail=dict(detail) if isinstance(detail, dict) else detail)
+        # Success (reuse it on the next pass) or a login for other credentials: go round again.
+
+
+def _pooled_entry(db, key, row, pin, fingerprint):
+    """A pooled entry plus one of its request slots, never on a retired transport."""
+    while True:
+        entry = _login_shared(db, key, row, pin, fingerprint)
+        if not entry.slots.acquire(timeout=REQUEST_SLOT_TIMEOUT):
+            _release(key, entry)
+            fail('remote_busy', '服务器上的 SSH 请求过多，请稍后重试', 503)
+        if not entry.retired:
+            return entry
+        # Retired (invalidated, timed out, aged) while we waited for the slot.
+        entry.slots.release()
+        _release(key, entry)
+
+
 @contextmanager
 def open_remote(db, user, server_id, *, dedicated=False):
     """Authenticated client for one request.
@@ -480,16 +555,7 @@ def open_remote(db, user, server_id, *, dedicated=False):
         with _login_lock(key):
             transport = _login(db, row, pin)
     else:
-        fingerprint_now = _credential_fingerprint(db, row, pin)
-        entry = _acquire(key, fingerprint_now)
-        if entry is None:
-            with _login_lock(key):  # one login in flight per server; latecomers reuse it
-                entry = _acquire(key, fingerprint_now)
-                if entry is None:
-                    entry = _put(key, fingerprint_now, _login(db, row, pin))
-        if not entry.slots.acquire(timeout=REQUEST_SLOT_TIMEOUT):
-            _release(key, entry)
-            fail('remote_busy', '服务器上的 SSH 请求过多，请稍后重试', 503)
+        entry = _pooled_entry(db, key, row, pin, _credential_fingerprint(db, row, pin))
         transport = entry.transport
     pooled = entry
     client = _RequestClient(transport, (lambda: _retire(key, pooled)) if pooled else None)

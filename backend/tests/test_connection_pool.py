@@ -199,6 +199,9 @@ def test_second_refusal_reports_chinese_message(remote, net):
     ('start', paramiko.SSHException('PRIVATE negotiation'), 'connection_failed', 'SSH 连接失败'),
     ('auth', paramiko.AuthenticationException('PRIVATE'), 'authentication_failed', 'SSH 认证失败'),
     ('auth', RuntimeError('PRIVATE_PASSWORD'), 'connection_failed', 'SSH 连接失败'),
+    ('start', paramiko.SSHException('Negotiation timed out.'), 'connection_failed', '连接服务器超时'),
+    ('auth', paramiko.AuthenticationException('Authentication timeout.'), 'connection_failed', '连接服务器超时'),
+    ('kex', None, 'connection_failed', '连接服务器超时'),
 ])
 def test_connect_phase_errors_are_specific(remote, net, monkeypatch, where, error, code, message, caplog):
     pin(remote)
@@ -207,6 +210,8 @@ def test_connect_phase_errors_are_specific(remote, net, monkeypatch, where, erro
         monkeypatch.setattr(net.rc.socket, 'create_connection', throw)
     elif where == 'start':
         PoolTransport.start_errors = [error, error]
+    elif where == 'kex':  # paramiko 5 returns from start_client on timeout without raising
+        monkeypatch.setattr(PoolTransport, 'initial_kex_done', False, raising=False)
     else:
         monkeypatch.setattr(PoolTransport, 'auth_password', throw)
     result = remote.post('/api/servers/71/connection/check')
@@ -379,3 +384,79 @@ def test_failed_channel_open_drops_only_a_broken_transport(remote, net, monkeypa
     assert exc.value.detail['code'] == 'remote_connection_lost'
     assert first.closed is dropped
     assert (use(net.rc) is first) is not dropped
+
+
+@pytest.mark.parametrize('failure, attempts, code', [
+    ('refused', 2, 'connection_refused_by_server'),
+    ('port', 1, 'connection_failed'),
+])
+def test_waiters_share_a_failed_login(remote, net, monkeypatch, failure, attempts, code):
+    pin(remote)
+    probe_count = len(PoolTransport.instances)
+    tries = []
+    real_connect = net.rc.socket.create_connection
+    def connect(*args, **kwargs):
+        tries.append(1)
+        time.sleep(0.2)  # long enough for every caller to queue behind the first login
+        if failure == 'port': raise ConnectionRefusedError()
+        return real_connect(*args, **kwargs)
+    monkeypatch.setattr(net.rc.socket, 'create_connection', connect)
+    if failure == 'refused':
+        PoolTransport.start_errors = [banner_eof(), EOFError()]
+    codes = []
+    def worker():
+        try: use(net.rc)
+        except HTTPException as exc: codes.append(exc.detail['code'])
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for t in threads: t.start()
+    for t in threads: t.join(10)
+    assert codes == [code] * 6
+    assert len(tries) == attempts
+    assert net.sleeps == ([1.5] if failure == 'refused' else [])
+    assert len(PoolTransport.instances) - probe_count == (2 if failure == 'refused' else 0)
+    # Once the failure is published, a new caller starts a fresh attempt.
+    monkeypatch.setattr(net.rc.socket, 'create_connection', real_connect)
+    use(net.rc)
+    assert len(logins()) == 1
+
+
+def test_slot_waiter_does_not_run_on_a_retired_transport(remote, net, monkeypatch):
+    pin(remote)
+    monkeypatch.setattr(net.rc, 'MAX_REQUESTS_PER_TRANSPORT', 1)
+    holding, release_a = threading.Event(), threading.Event()
+    seen = {}
+    def body_a(client):
+        holding.set()
+        release_a.wait(5)
+    a = threading.Thread(target=lambda: seen.update(a=use(net.rc, lambda c: (body_a(c), c.get_transport().shared)[1])))
+    a.start()
+    assert holding.wait(5)
+    b = threading.Thread(target=lambda: seen.update(b=use(net.rc)))
+    b.start()
+    time.sleep(0.2)  # B now waits for A's slot
+    net.rc.invalidate(71)
+    release_a.set()
+    a.join(5); b.join(5)
+    assert seen['b'] is not seen['a']
+    assert seen['a'].closed and not seen['b'].closed
+    assert len(logins()) == 2
+
+
+def test_a_long_request_does_not_make_its_transport_idle(remote, net, monkeypatch):
+    pin(remote)
+    now = [1000.0]
+    monkeypatch.setattr(net.rc, '_clock', lambda: now[0])
+    holding, release_a = threading.Event(), threading.Event()
+    seen = {}
+    def body_a(client):
+        holding.set()
+        release_a.wait(5)
+        return client.get_transport().shared
+    a = threading.Thread(target=lambda: seen.update(a=use(net.rc, body_a)))
+    a.start()
+    assert holding.wait(5)
+    now[0] += 200  # A has been busy for longer than the idle limit
+    seen['b'] = use(net.rc)
+    release_a.set()
+    a.join(5)
+    assert seen['b'] is seen['a'] and len(logins()) == 1
