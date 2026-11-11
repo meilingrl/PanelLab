@@ -303,6 +303,32 @@ it('C2: a failed background refresh keeps the cached view and shows the error ab
   expect(w2.text()).not.toContain('更新中…')
 })
 
+it('a failed background refresh replaces the running badge with the time of the shown data', async () => {
+  const w1 = await mountAgent()
+  expect(w1.get('[data-testid="agent-status"]').text()).toContain('Agent 运行中')
+  const savedAt = getAgentCache(71).savedAt
+  w1.unmount(); wrappers = []
+  routes['GET /api/servers/71/agent'] = () => failure('remote_connection_lost', '与服务器的 SSH 连接中断', 503)
+  const w2 = await mountAgent()
+  const bar = w2.get('[data-testid="agent-status"]')
+  expect(bar.text()).not.toContain('Agent 运行中')
+  expect(w2.get('[data-testid="agent-stale"]').text()).toBe('上次数据 · ' + new Date(savedAt).toLocaleString())
+  routes['GET /api/servers/71/agent'] = () => response(status())
+  await w2.findAll('button').find(b => b.text() === '刷新').trigger('click'); await flushPromises()
+  expect(w2.get('[data-testid="agent-status"]').text()).toContain('Agent 运行中')
+  expect(w2.find('[data-testid="agent-stale"]').exists()).toBe(false)
+})
+
+it('a trust_required background-refresh notice links to the task workspace', async () => {
+  const w1 = await mountAgent(); w1.unmount(); wrappers = []
+  routes['GET /api/servers/71/agent'] = () => failure('trust_required', 'x', 409)
+  const w2 = await mountAgent()
+  const alert = w2.get('[data-testid="agent-notice"]')
+  expect(alert.text()).toContain('尚未确认这台服务器的 SSH 指纹')
+  expect(alert.get('a').attributes('href')).toBe('/workspaces')
+  expect(alert.get('a').text()).toBe('前往任务工作区')
+})
+
 it('C3: alert settings are requested only when 告警设置 is opened', async () => {
   routes['GET /api/servers/71/agent/alerts'] = () => response({ smtp: null, smtp_password: '未设置', thresholds: {}, heartbeat_url: null, ssh_enabled: true })
   const w = await mountAgent()

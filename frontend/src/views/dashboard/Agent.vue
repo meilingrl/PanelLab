@@ -12,6 +12,9 @@ import AgentInstall from '../../components/agent/AgentInstall.vue'
 
 const hosts = ref([]), serverKey = ref(''), loading = ref(false), refreshing = ref(false), hostsError = ref('')
 const agentStatus = ref(null), jobs = ref([]), error = ref(null), notice = ref('')
+// noticeCode: error code of a failed background refresh; dataAt: when the shown data was fetched (ms).
+const noticeCode = ref(''), dataAt = ref(null)
+const setNotice = e => { notice.value = e ? errorText(e) : ''; noticeCode.value = e?.code || '' }
 const lastRuns = ref({}), previews = ref({}), selectedId = ref(null)
 // `editing` is null, 'new' or a job object (JobForm); `settings` toggles AlertSettings.
 const editing = ref(null), settings = ref(false), showUpgrade = ref(false)
@@ -70,18 +73,18 @@ async function fetchAll(seq, signal, id) {
   if (seq !== generation) return
   if (st.status === 'rejected') throw st.reason
   if (list.status === 'rejected') throw list.reason
-  agentStatus.value = st.value; jobs.value = list.value.jobs || []
+  agentStatus.value = st.value; jobs.value = list.value.jobs || []; dataAt.value = Date.now()
   if (selectedId.value && !selectedJob.value) selectedId.value = null
   applyEnriched(); saveCache(id)
   await loadExtras(seq, signal, id)
   if (seq === generation) saveCache(id)
 }
 function applyCache(entry) {
-  agentStatus.value = { ...entry.status }; jobs.value = [...entry.jobs]; lastRuns.value = { ...entry.lastRuns }; previews.value = { ...entry.previews }
+  agentStatus.value = { ...entry.status }; jobs.value = [...entry.jobs]; dataAt.value = entry.savedAt ?? null; lastRuns.value = { ...entry.lastRuns }; previews.value = { ...entry.previews }
 }
 async function load() {
   const seq = ++generation; controller?.abort(); controller = new AbortController()
-  agentStatus.value = null; jobs.value = []; error.value = null; notice.value = ''; lastRuns.value = {}; previews.value = {}
+  agentStatus.value = null; jobs.value = []; error.value = null; setNotice(null); lastRuns.value = {}; previews.value = {}
   selectedId.value = null; editing.value = null; settings.value = false; showUpgrade.value = false; refreshing.value = false
   if (!serverKey.value) { loading.value = false; return }
   setLastServer(serverKey.value)
@@ -90,14 +93,14 @@ async function load() {
   loading.value = true
   try { await fetchAll(seq, controller.signal, serverId.value) }
   catch (e) {
-    if (seq === generation && e.name !== 'AbortError') { if (cached && !INSTALL_CODES.includes(e.code)) notice.value = errorText(e); else { if (INSTALL_CODES.includes(e.code)) deleteAgentCache(serverId.value); error.value = e } }
+    if (seq === generation && e.name !== 'AbortError') { if (cached && !INSTALL_CODES.includes(e.code)) setNotice(e); else { if (INSTALL_CODES.includes(e.code)) deleteAgentCache(serverId.value); error.value = e } }
   }
   finally { if (seq === generation) { loading.value = false; refreshing.value = false } }
 }
 async function refresh() {
   const seq = generation, signal = controller.signal
-  try { await fetchAll(seq, signal, serverId.value); if (seq === generation) notice.value = '' }
-  catch (e) { if (seq === generation && e.name !== 'AbortError') notice.value = errorText(e) }
+  try { await fetchAll(seq, signal, serverId.value); if (seq === generation) setNotice(null) }
+  catch (e) { if (seq === generation && e.name !== 'AbortError') setNotice(e) }
 }
 const mailFailed = computed(() => { const m = agentStatus.value?.mail; return m && m.at && m.ok === false ? m : null })
 const heartbeatFailed = computed(() => { const h = agentStatus.value?.heartbeat; return h && h.configured && h.ok === false ? h : null })
@@ -157,8 +160,11 @@ onBeforeUnmount(() => { unmounted = true; generation++; controller?.abort(); cle
       <p v-if="error.message && error.code !== 'agent_permission' && ERROR_TEXT[error.code]" class="ws-muted">详情：{{ error.message }}</p>
       <AgentInstall v-if="error.code === 'protocol_mismatch'" :key="serverId" :server-id="serverId" :host="hostLabel" upgrade @recheck="load" /></section>
     <template v-else-if="agentStatus">
-      <p v-if="notice" class="ws-error" role="alert">{{ notice }}</p>
-      <div class="ws-row ws-wrap agent-statusbar" data-testid="agent-status"><span class="ws-badge good">Agent 运行中</span>
+      <p v-if="notice" class="ws-error" role="alert" data-testid="agent-notice">{{ notice }}<template v-if="noticeCode === 'trust_required'"> <router-link to="/workspaces">前往任务工作区</router-link></template></p>
+      <div class="ws-row ws-wrap agent-statusbar" data-testid="agent-status">
+        <!-- While a refresh failed, the shown data is old: do not claim the Agent is running. -->
+        <span v-if="notice" class="ws-badge" data-testid="agent-stale">上次数据 · {{ dataAt ? new Date(dataAt).toLocaleString() : '未知' }}</span>
+        <span v-else class="ws-badge good">Agent 运行中</span>
         <span>{{ agentStatus.hostname }}</span><span class="ws-muted">版本 {{ agentStatus.version }}</span><span v-if="refreshing" class="ws-muted" data-testid="agent-refreshing">更新中…</span><span class="ws-muted">{{ agentStatus.job_count ?? jobs.length }} 个作业</span>
         <span class="ws-muted">正在运行 {{ (agentStatus.running || []).length }}</span><span v-if="agentStatus.draining" class="ws-badge warn">正在排空</span>
         <span v-if="heartbeatFailed" class="ws-badge warn" data-testid="agent-heartbeat-failed">心跳请求失败（{{ formatTime(heartbeatFailed.at) }}）</span>
