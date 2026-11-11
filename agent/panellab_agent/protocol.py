@@ -177,7 +177,8 @@ def op_jobs_list(agent, args):
         r = last.get(j["id"])
         view["last_run"] = None if r is None else {
             "run_id": r["id"], "status": r["status"], "trigger": r["trigger"],
-            "started_at": r["started_at"], "ended_at": r["finished_at"]}
+            "started_at": r["started_at"], "ended_at": r["finished_at"],
+            "exit_code": r["exit_code"]}
         view["next_run"] = _job_next_run(agent, j)
         out.append(view)
     return {"jobs": out}

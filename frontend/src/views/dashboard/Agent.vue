@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, toRaw, watch, onMounted, onBeforeUnmount } from 'vue'
 import { agentApi } from '../../composables/useAgentApi'
-import { getAgentCache, setAgentCache, getLastServer, setLastServer } from '../../composables/agentCache'
+import { getAgentCache, setAgentCache, deleteAgentCache, getLastServer, setLastServer } from '../../composables/agentCache'
 import { request, formatTime } from '../../composables/useWorkspaceApi'
 import '../../components/workspaces/workspaces.css'
 import JobList from '../../components/agent/JobList.vue'
@@ -42,7 +42,7 @@ function applyEnriched() {
   const last = { ...lastRuns.value }, prev = { ...previews.value }
   for (const j of jobs.value) {
     if (!enrichedJob(j)) continue
-    last[j.id] = j.last_run ? { id: j.last_run.run_id, job_id: j.id, status: j.last_run.status, trigger: j.last_run.trigger, started_at: j.last_run.started_at, finished_at: j.last_run.ended_at, exit_code: null } : null
+    last[j.id] = j.last_run ? { id: j.last_run.run_id, job_id: j.id, status: j.last_run.status, trigger: j.last_run.trigger, started_at: j.last_run.started_at, finished_at: j.last_run.ended_at, exit_code: j.last_run.exit_code ?? null } : null
     prev[previewKey(j)] = j.next_run?.local || '无'
   }
   lastRuns.value = last; previews.value = prev
@@ -77,7 +77,7 @@ async function fetchAll(seq, signal, id) {
   if (seq === generation) saveCache(id)
 }
 function applyCache(entry) {
-  agentStatus.value = entry.status; jobs.value = entry.jobs; lastRuns.value = { ...entry.lastRuns }; previews.value = { ...entry.previews }
+  agentStatus.value = { ...entry.status }; jobs.value = [...entry.jobs]; lastRuns.value = { ...entry.lastRuns }; previews.value = { ...entry.previews }
 }
 async function load() {
   const seq = ++generation; controller?.abort(); controller = new AbortController()
@@ -90,7 +90,7 @@ async function load() {
   loading.value = true
   try { await fetchAll(seq, controller.signal, serverId.value) }
   catch (e) {
-    if (seq === generation && e.name !== 'AbortError') { if (cached && !INSTALL_CODES.includes(e.code)) notice.value = errorText(e); else error.value = e }
+    if (seq === generation && e.name !== 'AbortError') { if (cached && !INSTALL_CODES.includes(e.code)) notice.value = errorText(e); else { if (INSTALL_CODES.includes(e.code)) deleteAgentCache(serverId.value); error.value = e } }
   }
   finally { if (seq === generation) { loading.value = false; refreshing.value = false } }
 }

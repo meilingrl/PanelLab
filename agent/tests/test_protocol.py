@@ -323,13 +323,15 @@ def test_jobs_list_carries_last_run_and_next_run(rig, tmp_path):
     st.finish_run(r3, "cancelled", -15, 0, False)
     r4 = st.insert_run("stopped", "manual", None, 1)  # still running
     jobs = {j["id"]: j for j in ok(call(a, "jobs.list"))["jobs"]}
-    keys = {"run_id", "status", "trigger", "started_at", "ended_at"}
+    keys = {"run_id", "status", "trigger", "started_at", "ended_at", "exit_code"}
     assert set(jobs["daily"]["last_run"]) == keys
     assert jobs["daily"]["last_run"]["run_id"] == r2
     assert jobs["daily"]["last_run"]["status"] == "failed"
     assert jobs["daily"]["last_run"]["trigger"] == "manual"
     assert jobs["daily"]["last_run"]["ended_at"] is not None
     assert jobs["manual"]["last_run"]["status"] == "cancelled"
+    assert jobs["manual"]["last_run"]["exit_code"] == -15
+    assert jobs["daily"]["last_run"]["exit_code"] == 1
     assert jobs["stopped"]["last_run"]["run_id"] == r4
     assert jobs["stopped"]["last_run"]["status"] == "running"
     assert jobs["stopped"]["last_run"]["ended_at"] is None

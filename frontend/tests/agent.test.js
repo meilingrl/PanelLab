@@ -340,3 +340,28 @@ it('C6: returning to the page selects the last selected server', async () => {
   expect(w2.get('#agent-server').element.value).toBe('server:72')
   expect(w2.text()).toContain('网站任务')
 })
+
+it('F1: last_run exit_code brings back the exit-code tooltip', async () => {
+  routes['GET /api/servers/71/agent/jobs'] = () => response({ jobs: [enriched({ last_run: { run_id: 6, status: 'cancelled', trigger: 'manual', started_at: 'a', ended_at: 'b', exit_code: -15 } })] })
+  const w = await mountAgent()
+  expect(w.get('[data-testid="job-row"] .ws-badge').attributes('title')).toBe('退出码：信号 15')
+})
+
+it('F3: agent_not_installed / protocol_mismatch drop the stale cache entry', async () => {
+  const w1 = await mountAgent(); w1.unmount(); wrappers = []
+  expect(getAgentCache(71)).toBeDefined()
+  routes['GET /api/servers/71/agent'] = () => failure('agent_not_installed', 'x', 404)
+  await mountAgent()
+  expect(getAgentCache(71)).toBeUndefined()
+})
+
+it('F4: the page works on copies; mutating its state never changes the cache', async () => {
+  const w1 = await mountAgent(); w1.unmount(); wrappers = []
+  const cached = getAgentCache(71)
+  const gate = deferred()
+  routes['GET /api/servers/71/agent'] = async () => { await gate.promise; return response(status()) }
+  const w2 = mount(Agent, { global: { stubs: { RouterLink, 'router-link': RouterLink } } }); wrappers.push(w2); await Promise.resolve()
+  w2.vm.$.setupState.jobs.push({ id: 'x', name: 'x', schedule: { cron: [], tz: 'UTC' } })
+  expect(cached.jobs.length).toBe(1)
+  gate.resolve(); await flushPromises()
+})
