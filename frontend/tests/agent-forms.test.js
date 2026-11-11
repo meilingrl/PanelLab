@@ -303,3 +303,76 @@ it('R20: upgrade button reveals the install panel with the upgrade heading and b
   w = mnt(Agent); await flushPromises()
   expect(t(w, 'install-heading').text()).toBe('升级 Agent')
 })
+
+// Task C: email settings with provider presets
+const noSmtp = () => { routes['GET /api/servers/71/agent/alerts'] = () => response(alertsView({ smtp: null, smtp_password: '未设置' })) }
+const PRESETS = [
+  ['qq.com', 'smtp.qq.com'], ['foxmail.com', 'smtp.qq.com'], ['163.com', 'smtp.163.com'], ['126.com', 'smtp.126.com'], ['yeah.net', 'smtp.yeah.net'],
+  ['gmail.com', 'smtp.gmail.com'], ['googlemail.com', 'smtp.gmail.com'], ['aliyun.com', 'smtp.aliyun.com'], ['QQ.COM', 'smtp.qq.com'],
+]
+it.each(PRESETS)('C: address at %s fills the %s preset', async (domain, host) => {
+  noSmtp(); const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  await t(w, 'smtp-on').setValue(true)
+  const A = `me@${domain}`; await t(w, 'smtp-email').setValue(`  ${A} `)
+  expect(w.find('[data-testid="smtp-advanced"]').exists()).toBe(false)
+  expect(t(w, 'smtp-hint').text().length).toBeGreaterThan(5)
+  await t(w, 'smtp-password-mode').setValue('set'); await t(w, 'smtp-password').setValue('P')
+  await t(w, 'alerts-save').trigger('click'); await flushPromises()
+  expect(body(0, 'PUT').smtp).toEqual({ host, port: 465, security: 'ssl', username: A, from: A, to: [A], password: 'P' })
+  await t(w, 'smtp-advanced-toggle').trigger('click')
+  expect(t(w, 'smtp-host').element.value).toBe(host); expect(t(w, 'smtp-from').element.value).toBe(A)
+})
+
+it('C: QQ address payload is exactly the agreed shape', async () => {
+  noSmtp(); const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  await t(w, 'smtp-on').setValue(true); await t(w, 'smtp-email').setValue('1234@qq.com')
+  expect(t(w, 'smtp-to').element.value).toBe('1234@qq.com')
+  await t(w, 'smtp-password-mode').setValue('set'); await t(w, 'smtp-password').setValue('authcode')
+  expect(t(w, 'smtp-password').attributes('type')).toBe('password'); expect(t(w, 'smtp-password').attributes('autocomplete')).toBe('new-password')
+  expect(t(w, 'smtp-hint').text()).toContain('QQ 邮箱网页版 → 设置 → 账号与安全 → 开启 SMTP 服务并生成授权码')
+  expect(w.text()).toContain('阿里云服务器默认封禁 25 端口，请使用 465')
+  await t(w, 'alerts-save').trigger('click'); await flushPromises()
+  expect(body(0, 'PUT')).toEqual({ smtp: { host: 'smtp.qq.com', port: 465, security: 'ssl', username: '1234@qq.com', from: '1234@qq.com', to: ['1234@qq.com'], password: 'authcode' },
+    thresholds: { disk_percent: 90, ssh_failures: 30 }, heartbeat_url: null, ssh_enabled: true })
+})
+
+it('C: extra recipients, comma or line separated', async () => {
+  noSmtp(); const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  await t(w, 'smtp-on').setValue(true); await t(w, 'smtp-email').setValue('a@163.com')
+  expect(w.text()).toContain('网页版邮箱 → 设置 → POP3/SMTP/IMAP → 开启 SMTP 服务并获取授权码')
+  await t(w, 'smtp-to').setValue('a@163.com, b@x.com\nc@x.com')
+  await t(w, 'smtp-password-mode').setValue('set'); await t(w, 'smtp-password').setValue('P')
+  await t(w, 'alerts-save').trigger('click'); await flushPromises()
+  expect(body(0, 'PUT').smtp.to).toEqual(['a@163.com', 'b@x.com', 'c@x.com'])
+})
+
+it('C: unknown domain opens advanced settings with a notice', async () => {
+  noSmtp(); const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  await t(w, 'smtp-on').setValue(true)
+  expect(w.find('[data-testid="smtp-advanced"]').exists()).toBe(false)
+  await t(w, 'smtp-email').setValue('me@corp.example')
+  expect(t(w, 'smtp-advanced').exists()).toBe(true)
+  expect(w.text()).toContain('未识别的邮箱服务商，请填写服务商提供的 SMTP 设置')
+  await t(w, 'smtp-host').setValue('smtp.corp.example')
+  await t(w, 'smtp-password-mode').setValue('set'); await t(w, 'smtp-password').setValue('P')
+  await t(w, 'alerts-save').trigger('click'); await flushPromises()
+  expect(body(0, 'PUT').smtp).toMatchObject({ host: 'smtp.corp.example', from: 'me@corp.example', to: ['me@corp.example'], username: 'me@corp.example' })
+})
+
+it('C: loaded matching preset shows the simple view; non-matching opens advanced', async () => {
+  routes['GET /api/servers/71/agent/alerts'] = () => response(alertsView({ smtp: { host: 'smtp.qq.com', port: 465, security: 'ssl', username: 'u@qq.com', from: 'u@qq.com', to: ['u@qq.com'] } }))
+  let w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  expect(w.find('[data-testid="smtp-advanced"]').exists()).toBe(false); expect(t(w, 'smtp-email').element.value).toBe('u@qq.com')
+  routes['GET /api/servers/71/agent/alerts'] = () => response(alertsView({ smtp: { host: 'smtp.qq.com', port: 587, security: 'starttls', username: 'u@qq.com', from: 'u@qq.com', to: ['u@qq.com'] } }))
+  w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  expect(t(w, 'smtp-advanced').exists()).toBe(true)
+  routes['GET /api/servers/71/agent/alerts'] = () => response(alertsView({ smtp: { host: 'smtp.qq.com', port: 465, security: 'ssl', username: 'bot', from: 'u@qq.com', to: ['u@qq.com'] } }))
+  w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  expect(t(w, 'smtp-advanced').exists()).toBe(true)
+})
+
+it('C: turning mail off still sends smtp null', async () => {
+  const w = mnt(AlertSettings, { serverId: 71 }); await flushPromises()
+  await t(w, 'smtp-on').setValue(false); await t(w, 'alerts-save').trigger('click'); await flushPromises()
+  expect(body(0, 'PUT').smtp).toBeNull()
+})
