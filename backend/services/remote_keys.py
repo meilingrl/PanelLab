@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
 from config import get_settings
 from models.server_key import ServerPrivateKey
-from services.remote_connection import fail, fingerprint, owned_server
+from services.remote_connection import fail, fingerprint, invalidate, owned_server
 from utils.cipher import decrypt_password, encrypt_password
 
 KEY_TEXT_LIMIT = 16 * 1024
@@ -103,6 +103,7 @@ def save(db, user, server_id, text, passphrase=None):
     row.key_type = key.get_name()
     row.fingerprint = fingerprint(key)
     db.commit()
+    invalidate(server.id)
     return summary(row)
 
 
@@ -110,6 +111,7 @@ def delete(db, user, server_id):
     owned_server(db, user, server_id)
     db.query(ServerPrivateKey).filter(ServerPrivateKey.server_id == server_id).delete()
     db.commit()
+    invalidate(server_id)
     return {'configured': False}
 
 

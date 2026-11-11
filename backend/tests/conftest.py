@@ -46,6 +46,14 @@ def db_setup():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _ssh_pool():
+    """Pooled SSH transports must not leak from one test into the next."""
+    yield
+    from services import remote_connection
+    remote_connection.reset_pool()
+
+
 @pytest.fixture
 def client(db_setup, tmp_path, monkeypatch):
     monkeypatch.setenv("NGINX_CONF_DIR", str(tmp_path / "conf"))
