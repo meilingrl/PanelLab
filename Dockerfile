@@ -16,6 +16,7 @@ WORKDIR /app/backend
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./
+COPY agent/ /app/agent/
 COPY --from=frontend /app/frontend/dist ./static
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000

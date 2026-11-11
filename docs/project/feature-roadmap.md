@@ -22,6 +22,7 @@ MCP后续候选：元数据写工具、独立可撤销/限权凭证、远程HTTP
 3. **并入 main（已完成）**：[PR #1](https://github.com/meilingrl/PanelLab/pull/1) 于 2026-11-10 合并为 `3dba8c2`，CI 的后端、前端、MCP 三项通过。用户确认没有旧部署，不做 MEDIUMTEXT 升级脚本；以后若发现旧版 MySQL 实例再补。
 4. **首次使用彩排（已完成，[记录](first-use-rehearsal-20261110.md)）**：用户尚未在自己的服务器上使用。先从合并后的 main 按新用户路径完整走一遍（启动器、登录、添加仅密钥登录的 Linux 服务器、指纹、任务、日志、监控），修掉途中的阻碍，再交给用户实际试用。发现的 6 处阻碍已修复；下一步等待用户在自己服务器上试用后的反馈。
 5. **真实使用后再定**：定时任务“今天是否跑过”、网站 HTTP 检查等只读状态，优先于启动/停止等写操作；按任务流量归因、大文件传输、MCP 写工具和限权凭证暂缓。
+6. **服务器 Agent 第一版（已实现，待用户在阿里云上安装验收）**：服务器上的常驻 Agent 负责定时作业、运行历史和告警邮件，Mac 上的 PanelLab 经固定指纹 SSH 查看和控制。见[设计](../design/design-server-agent.md)、[计划](../design/plan-server-agent.md)、[记录](server-agent-20261111.md)，使用方法见[用户指南](../user/server-agent.md)。
 
 在考虑**用户体验**和**功能完整度**的前提下，将产品构想整理为可落地的功能模块与优先级，与现有 [requirements.md](requirements.md) 及各 [design/*.md](../design/) 衔接。
 

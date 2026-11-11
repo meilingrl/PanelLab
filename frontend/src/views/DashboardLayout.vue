@@ -26,6 +26,7 @@ onMounted(async () => {
 
 const navItems = [
   { path: "/workspaces", name: "任务工作区", icon: "▱" },
+  { path: "/agent", name: "服务器 Agent", icon: "⚙" },
   { path: "/settings", name: "用户中心", icon: "👤" },
   { path: "/monitor", name: "系统监控", icon: "📈" },
   { path: "/terminal", name: "终端控制", icon: "💻" },

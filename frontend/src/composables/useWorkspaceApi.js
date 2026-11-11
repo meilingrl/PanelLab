@@ -4,7 +4,7 @@ function errorMessage(data, status) {
   if (Array.isArray(detail)) return detail.map(e => `${e.loc?.slice(1).join('.') || '输入'}: ${e.msg}`).join('；')
   return (typeof detail === 'string' ? detail : detail?.message) || `请求失败 (${status})`
 }
-async function request(path, { method='GET', body, signal, binary=false }={}) {
+export async function request(path, { method='GET', body, signal, binary=false }={}) {
   const response = await fetch(`/api${path}`, {
     method, signal,
     headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}`, ...(body === undefined ? {} : {'Content-Type':'application/json'}) },

@@ -1,0 +1,31 @@
+[Unit]
+Description=PanelLab Agent (scheduled jobs and server alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=panellab
+Group=panellab
+ExecStart=/usr/bin/python3 -m panellab_agent.daemon --config /etc/panellab-agent/agent.json --data-dir /var/lib/panellab-agent --socket /run/panellab-agent/agent.sock
+Environment=PYTHONPATH=/opt/panellab-agent/current
+Environment=PYTHONUNBUFFERED=1
+RuntimeDirectory=panellab-agent
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+ReadWritePaths=/etc/panellab-agent
+# Stop/restart: SIGTERM goes to the daemon only. It stops scheduling, gives
+# running jobs 60 s, then cancels the rest (TERM, KILL after 30 s; recorded as
+# cancelled, one notice mail) and flushes mail. Once the daemon exits, systemd
+# SIGKILLs anything left in the cgroup. A crash also ends the jobs (agent_lost).
+# Planned upgrades go through install.sh, which drains first.
+KillMode=mixed
+TimeoutStopSec=150
+
+[Install]
+WantedBy=multi-user.target
