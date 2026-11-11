@@ -108,3 +108,15 @@ Files: `backend/services/remote_connection.py` (main change); any call sites tha
 - `python3 scripts/verify_agent_lab.py --panel` passes.
 - Add a lab check that fires 10 requests at once at an sshd with `MaxStartups 2:100:2`: all succeed and only one login happens. If the fixture can't easily be configured this way, use a unit test instead and say so in the record.
 - Ask the user to upgrade the Agent on Aliyun and check that switching pages is smooth and the false error is gone.
+
+## 实施记录
+
+2026-11-12。以下是与上文计划不同或计划之外的做法，细节见各任务报告和提交。
+
+- **告警设置不缓存。** 缓存只保存状态、作业列表、最近结果和下次运行；告警设置改为打开「告警设置」时才请求（Task B 第 4 项），所以不进缓存。
+- **没有用 `savedAt` 判断缓存过期。** 返回页面时总是先显示缓存再后台刷新；`savedAt` 只用于刷新失败时显示「上次数据 · 时间」。
+- **MaxStartups 实验室检查改为单元测试。** 没有给实验室 sshd 配置 `MaxStartups 2:100:2`，改用多线程单元测试证明：并发请求只登录一次，排队的请求共享失败结果，被拒绝时只重试一次。
+- **R26：安装后权限重试。** 复用的连接保留登录时的附加组，看不到 `install.sh` 新加的 `panellab` 组。`agent_client.call()` 遇到 `agent_permission`（退出码 4）时作废该服务器的连接，用新登录重试一次。
+- **R29：睡眠后的连接。** macOS 睡眠时单调时钟停走，所以空闲和最长存活时间同时按单调时钟和墙上时钟计算（墙上时钟倒退也视为过期）。复用的连接第一次开通道就失败时，换新登录重试一次；已经开出通道后不再重试，操作不会发两次。
+- **每条连接最多 6 个并发请求。** OpenSSH 默认每条连接 10 个会话；超出的请求排队，30 秒后返回 `remote_busy`（「服务器上的 SSH 请求过多，请稍后重试」）。
+- **使用中的错误统一为 `remote_connection_lost`。** 连接建立后才出现的 paramiko/EOF/OS 错误，如果调用方没有自行处理，返回 `remote_connection_lost`（「与服务器的 SSH 连接中断」），不再算作 `connection_failed`。
