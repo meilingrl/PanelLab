@@ -191,7 +191,7 @@ it('alert settings validates smtp and thresholds before sending', async () => {
     const old = t(w, id).element.value; await t(w, id).setValue(value); await t(w, 'alerts-save').trigger('click')
     expect(t(w, 'alerts-error').text()).toContain(text); await t(w, id).setValue(old)
   }
-  await attempt('smtp-port', '70000', '端口'); await attempt('smtp-to', 'nobody', '收件人'); await attempt('smtp-to', Array(11).fill('a@x.com').join('\n'), '收件人')
+  await attempt('smtp-port', '70000', '端口'); await attempt('smtp-to', 'nobody', '收件人'); await attempt('smtp-to', Array.from({ length: 11 }, (_, i) => `a${i}@x.com`).join('\n'), '收件人')
   await attempt('th-disk_percent', '0', '磁盘'); await attempt('th-sustain_minutes', '1441', '分钟'); await attempt('th-ssh_failures', '100001', 'SSH')
   await attempt('smtp-host', '', '主机')
   expect(fetch.mock.calls.filter(([, o]) => o?.method === 'PUT')).toHaveLength(0)
