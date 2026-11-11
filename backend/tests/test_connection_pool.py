@@ -460,3 +460,55 @@ def test_a_long_request_does_not_make_its_transport_idle(remote, net, monkeypatc
     release_a.set()
     a.join(5)
     assert seen['b'] is seen['a'] and len(logins()) == 1
+
+
+class AgentTransport(PoolTransport):
+    """Exec channels answered in order from AgentTransport.replies (shared across logins)."""
+    replies = []
+    def open_session(self, timeout=None, window_size=None, max_packet_size=None):
+        from tests.test_agent_client import Channel
+        status, stdout = AgentTransport.replies.pop(0)
+        return Channel(stdout=stdout, status=status)
+
+
+def agent_call(rc):
+    from services import agent_client
+    with SessionLocal() as db:
+        return agent_client.call(db, db.get(User, 1), 71, 'status')
+
+
+@pytest.mark.parametrize('replies, outcome, login_count', [
+    ([(4, b''), (0, b'{"ok":true,"result":{"v":1}}\n')], {'v': 1}, 2),
+    ([(4, b''), (4, b'')], 'agent_permission', 2),
+    ([(3, b'')], 'agent_unreachable', 1),
+    ([(127, b'')], 'agent_not_installed', 1),
+])
+def test_agent_permission_is_retried_once_on_a_fresh_login(remote, net, monkeypatch, replies, outcome, login_count):
+    """A pooled login predates install.sh adding the user to group panellab; a new login sees it."""
+    monkeypatch.setattr(net.rc.paramiko, 'Transport', AgentTransport)
+    pin(remote)
+    AgentTransport.replies = list(replies)
+    if isinstance(outcome, dict):
+        assert agent_call(net.rc) == outcome
+    else:
+        with pytest.raises(HTTPException) as exc:
+            agent_call(net.rc)
+        assert exc.value.detail['code'] == outcome
+    assert len(logins()) == login_count
+    assert AgentTransport.replies == []
+    if login_count == 2:  # the stale transport is gone; the fresh one stays pooled
+        assert PoolTransport.instances[1].closed and not PoolTransport.instances[2].closed
+    else:  # other failures do not throw away the pooled login
+        assert not PoolTransport.instances[1].closed
+
+
+def test_invalidate_forces_a_new_login_while_the_old_transport_is_in_use(remote, net):
+    pin(remote)
+    def body(client):
+        net.rc.invalidate(71)
+        inner = use(net.rc)
+        assert not client.get_transport().shared.closed  # still usable by this request
+        return client.get_transport().shared, inner
+    old, fresh = use(net.rc, body)
+    assert fresh is not old and old.closed and not fresh.closed
+    assert len(logins()) == 2
