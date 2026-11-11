@@ -43,6 +43,8 @@ class PoolTransport(FakeTransport):
             raise PoolTransport.start_errors.pop(0)
     def is_active(self): return not self.closed
     def open_session(self, timeout=None, window_size=None, max_packet_size=None):
+        if getattr(self, 'dead', False):  # TCP silently gone (e.g. after the host slept)
+            raise EOFError()
         channel = FakeChannel()
         self.channels.append(channel)
         return channel
@@ -512,3 +514,69 @@ def test_invalidate_forces_a_new_login_while_the_old_transport_is_in_use(remote,
     old, fresh = use(net.rc, body)
     assert fresh is not old and old.closed and not fresh.closed
     assert len(logins()) == 2
+
+
+def test_wall_clock_gap_evicts_even_when_monotonic_says_fresh(remote, net, monkeypatch):
+    """macOS monotonic time stops while the machine sleeps; wall time does not."""
+    pin(remote)
+    mono, wall = [1000.0], [5000.0]
+    monkeypatch.setattr(net.rc, '_clock', lambda: mono[0])
+    monkeypatch.setattr(net.rc, '_wall', lambda: wall[0], raising=False)
+    first = use(net.rc)
+    mono[0] += 1
+    wall[0] += 3600  # slept for an hour
+    second = use(net.rc)
+    assert second is not first and first.closed and len(logins()) == 2
+    wall[0] -= 30  # the wall clock jumped backwards: do not trust the entry
+    third = use(net.rc)
+    assert third is not second and second.closed and len(logins()) == 3
+    wall[0] += 3600
+    net.rc.sweep()
+    assert third.closed
+
+
+def test_dead_reused_transport_is_replaced_before_anything_runs(remote, net):
+    pin(remote)
+    first = use(net.rc)
+    first.dead = True
+    runs = []
+    def body(client):
+        runs.append(1)
+        channel = client.get_transport().open_session(timeout=1)
+        return client.get_transport().shared, channel
+    shared, channel = use(net.rc, body)
+    assert runs == [1] and len(logins()) == 2
+    assert shared is not first and channel in shared.channels
+    assert first.closed and not shared.closed
+
+
+def test_dead_fresh_transport_is_not_retried(remote, net, monkeypatch):
+    pin(remote)
+    monkeypatch.setattr(PoolTransport, 'dead', True, raising=False)
+    with pytest.raises(HTTPException) as exc:
+        use(net.rc, lambda client: client.get_transport().open_session(timeout=1))
+    assert exc.value.detail['code'] == 'remote_connection_lost'
+    assert len(logins()) == 1
+
+
+def test_no_retry_once_a_channel_was_opened(remote, net):
+    pin(remote)
+    first = use(net.rc)
+    def body(client):
+        client.get_transport().open_session(timeout=1)  # the operation may now run remotely
+        first.dead = True
+        client.get_transport().open_session(timeout=1)
+    with pytest.raises(HTTPException) as exc:
+        use(net.rc, body)
+    assert exc.value.detail['code'] == 'remote_connection_lost'
+    assert len(logins()) == 1
+
+
+def test_app_shutdown_closes_pooled_transports(remote, net):
+    from fastapi.testclient import TestClient
+    from main import app
+    pin(remote)
+    pooled = use(net.rc)
+    with TestClient(app):
+        pass
+    assert pooled.closed

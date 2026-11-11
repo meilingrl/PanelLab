@@ -18,6 +18,8 @@ from routers import auth, db_admin, docs, feedback, monitor, sites, site_changes
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     yield
+    from services.remote_connection import reset_pool
+    reset_pool()  # close pooled SSH transports on shutdown
 
 
 app = FastAPI(title="PanelLab", version="0.1.0", lifespan=lifespan)

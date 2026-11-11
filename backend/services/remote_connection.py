@@ -28,7 +28,10 @@ SWEEP_INTERVAL = 30
 # that briefly holds two channels.
 MAX_REQUESTS_PER_TRANSPORT = 6
 REQUEST_SLOT_TIMEOUT = 30
+# Pool ages are measured on both clocks: macOS (and its VMs) stop monotonic time while
+# the machine sleeps, so a transport from before a sleep would otherwise look fresh.
 _clock = time.monotonic
+_wall = time.time
 _sleep = time.sleep
 log = logging.getLogger(__name__)
 
@@ -298,6 +301,22 @@ def _retire_locked(key, entry):
     return entry.transport if entry.users == 0 else None
 
 
+def _now():
+    return _clock(), _wall()
+
+
+def _elapsed(since, now):
+    """Seconds since `since` by the larger of both clocks; a backwards wall jump counts as forever."""
+    mono, wall = now[0] - since[0], now[1] - since[1]
+    return float('inf') if wall < 0 else max(mono, wall)
+
+
+def _stale(entry, now):
+    # A transport busy with a long request is not idle, whatever last_used says.
+    return (_elapsed(entry.created, now) >= MAX_AGE_SECONDS or not entry.transport.is_active()
+            or (entry.users == 0 and _elapsed(entry.last_used, now) >= IDLE_SECONDS))
+
+
 def _close_all(transports):
     for transport in transports:
         if transport is not None:
@@ -309,11 +328,8 @@ def _acquire(key, fingerprint):
     with _pool_lock:
         entry = _pool.get(key)
         if entry is not None:
-            now = _clock()
-            # A transport busy with a long request is not idle, whatever last_used says.
-            idle = entry.users == 0 and now - entry.last_used >= IDLE_SECONDS
-            if (entry.fingerprint == fingerprint and entry.transport.is_active()
-                    and now - entry.created < MAX_AGE_SECONDS and not idle):
+            now = _now()
+            if entry.fingerprint == fingerprint and not _stale(entry, now):
                 entry.users += 1
                 entry.last_used = now
                 return entry
@@ -329,7 +345,7 @@ def _put(key, fingerprint, transport):
         old = _pool.get(key)
         if old is not None:
             stale = _retire_locked(key, old)
-        entry = _pool[key] = _Entry(transport, fingerprint, _clock())
+        entry = _pool[key] = _Entry(transport, fingerprint, _now())
         if _sweeper is None:
             _sweeper = threading.Thread(target=_sweep_loop, name='ssh-pool-sweeper', daemon=True)
             _sweeper.start()
@@ -341,7 +357,7 @@ def _release(key, entry, broken=False):
     closing = None
     with _pool_lock:
         entry.users -= 1
-        entry.last_used = _clock()
+        entry.last_used = _now()
         if broken or not entry.transport.is_active():
             _retire_locked(key, entry)
         if entry.retired and entry.users == 0:
@@ -372,11 +388,9 @@ def invalidate(server_id):
 
 def sweep():
     """Close transports idle for IDLE_SECONDS or older than MAX_AGE_SECONDS."""
-    now = _clock()
+    now = _now()
     with _pool_lock:
-        closing = [_retire_locked(key, entry) for key, entry in list(_pool.items())
-                   if now - entry.created >= MAX_AGE_SECONDS or not entry.transport.is_active()
-                   or (entry.users == 0 and now - entry.last_used >= IDLE_SECONDS)]
+        closing = [_retire_locked(key, entry) for key, entry in list(_pool.items()) if _stale(entry, now)]
     _close_all(closing)
 
 
@@ -395,7 +409,7 @@ def _sweep_loop():
 
 
 def reset_pool():
-    """Close every pooled transport, including ones in use (tests and shutdown)."""
+    """Close every pooled transport, including ones in use (tests and app shutdown)."""
     with _pool_lock:
         entries = list(_pool.values())
         _pool.clear()
@@ -419,21 +433,24 @@ class _RequestTransport:
     def __getattr__(self, name):
         return getattr(self.shared, name)
 
-    def _open(self, opener, args, kwargs):
+    def _open(self, name, args, kwargs):
         try:
-            channel = opener(*args, **kwargs)
+            channel = getattr(self.shared, name)(*args, **kwargs)
         except paramiko.ChannelException:
             raise  # the server refused this channel; the transport itself is fine
         except (paramiko.SSHException, EOFError, OSError):
-            self._request.broken = True  # e.g. "Timeout opening channel": do not reuse
-            raise
+            if not self._request._reconnect():
+                self._request.broken = True  # e.g. "Timeout opening channel": do not reuse
+                raise
+            # The reused transport was dead (e.g. the host slept); nothing ran remotely yet.
+            channel = getattr(self.shared, name)(*args, **kwargs)
         return self._request._track(channel)
 
     def open_session(self, *args, **kwargs):
-        return self._open(self.shared.open_session, args, kwargs)
+        return self._open('open_session', args, kwargs)
 
     def open_channel(self, *args, **kwargs):
-        return self._open(self.shared.open_channel, args, kwargs)
+        return self._open('open_channel', args, kwargs)
 
     def open_sftp_client(self):
         return paramiko.SFTPClient.from_transport(self)
@@ -442,7 +459,7 @@ class _RequestTransport:
 class _RequestClient(paramiko.SSHClient):
     """SSHClient API over a shared transport; closing it closes only this request's channels."""
 
-    def __init__(self, transport, on_abort=None):
+    def __init__(self, transport, on_abort=None, reconnect=None):
         super().__init__()
         # Authentication already happened explicitly; SSHClient only supplies SFTP/shell APIs.
         self._transport = _RequestTransport(transport, self)
@@ -451,9 +468,21 @@ class _RequestClient(paramiko.SSHClient):
         self._channels_lock = threading.Lock()
         self._aborted = False
         self._on_abort = on_abort
+        self._reconnect_once = reconnect  # only for a reused pooled transport
+        self._opened = False
         self.broken = False
 
+    def _reconnect(self):
+        """Swap in a fresh login once, if no channel has been opened yet. True if swapped."""
+        reconnect, self._reconnect_once = self._reconnect_once, None
+        if reconnect is None or self._opened or self._aborted:
+            return False
+        self.shared = self._transport.shared = reconnect()
+        return True
+
     def _track(self, channel):
+        self._opened = True
+        self._reconnect_once = None
         with self._channels_lock:
             aborted = self._aborted
             if not aborted:
@@ -485,7 +514,9 @@ class _RequestClient(paramiko.SSHClient):
 
 
 def _login_shared(db, key, row, pin, fingerprint):
-    """Pooled entry (users already counted) from at most one login in flight per key.
+    """(pooled entry with users already counted, whether this caller just logged it in).
+
+    At most one login is in flight per key.
 
     Callers that queued behind a login get its result: the pooled transport or the same
     error, without connecting themselves. A caller arriving after the outcome was
@@ -494,7 +525,7 @@ def _login_shared(db, key, row, pin, fingerprint):
     while True:
         entry = _acquire(key, fingerprint)
         if entry is not None:
-            return entry
+            return entry, False
         with _pool_lock:
             attempt = _logins_in_flight.get(key)
             leader = attempt is None
@@ -503,7 +534,11 @@ def _login_shared(db, key, row, pin, fingerprint):
         if leader:
             try:
                 with _login_lock(key):  # also serialises against dedicated logins
-                    return _put(key, fingerprint, _login(db, row, pin))
+                    # A login that finished just before we became leader is reused.
+                    entry = _acquire(key, fingerprint)
+                    if entry is not None:
+                        return entry, False
+                    return _put(key, fingerprint, _login(db, row, pin)), True
             except HTTPException as exc:
                 attempt.error = (exc.status_code, exc.detail)
                 raise
@@ -524,14 +559,14 @@ def _login_shared(db, key, row, pin, fingerprint):
 
 
 def _pooled_entry(db, key, row, pin, fingerprint):
-    """A pooled entry plus one of its request slots, never on a retired transport."""
+    """(entry, fresh): a pooled entry plus one of its request slots, never a retired one."""
     while True:
-        entry = _login_shared(db, key, row, pin, fingerprint)
+        entry, fresh = _login_shared(db, key, row, pin, fingerprint)
         if not entry.slots.acquire(timeout=REQUEST_SLOT_TIMEOUT):
             _release(key, entry)
             fail('remote_busy', '服务器上的 SSH 请求过多，请稍后重试', 503)
         if not entry.retired:
-            return entry
+            return entry, fresh
         # Retired (invalidated, timed out, aged) while we waited for the slot.
         entry.slots.release()
         _release(key, entry)
@@ -550,15 +585,29 @@ def open_remote(db, user, server_id, *, dedicated=False):
     except HTTPException:
         _discard(key)
         raise
-    entry = None
+    state = {'entry': None}
+    client = None
     if dedicated:
         with _login_lock(key):
             transport = _login(db, row, pin)
     else:
-        entry = _pooled_entry(db, key, row, pin, _credential_fingerprint(db, row, pin))
-        transport = entry.transport
-    pooled = entry
-    client = _RequestClient(transport, (lambda: _retire(key, pooled)) if pooled else None)
+        fingerprint_now = _credential_fingerprint(db, row, pin)
+        state['entry'], fresh = _pooled_entry(db, key, row, pin, fingerprint_now)
+        transport = state['entry'].transport
+
+        def reconnect():
+            old, state['entry'] = state['entry'], None
+            old.slots.release()
+            _release(key, old, broken=True)
+            state['entry'], _ = _pooled_entry(db, key, row, pin, fingerprint_now)
+            return state['entry'].transport
+
+        def retire():
+            if state['entry'] is not None:
+                _retire(key, state['entry'])
+        client = _RequestClient(transport, retire, None if fresh else reconnect)
+    if client is None:
+        client = _RequestClient(transport)
     broken = False
     try:
         yield client
@@ -573,9 +622,10 @@ def open_remote(db, user, server_id, *, dedicated=False):
             'code': 'remote_connection_lost', 'message': '与服务器的 SSH 连接中断'}) from None
     finally:
         client.close()
-        if entry is None:
+        entry = state['entry']
+        if dedicated:
             _close(transport)
-        else:
+        elif entry is not None:
             entry.slots.release()
             _release(key, entry, broken or client.broken)
 
