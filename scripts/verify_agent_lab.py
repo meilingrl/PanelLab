@@ -299,7 +299,7 @@ class Lab:
                       "/opt/panellab-agent root:root 755", "/usr/local/bin/panellab-agentctl root:root 755"]
         self.check("directory owners and modes", [p for p in perms if p] == want_perms, json.dumps(perms))
         link = dexec("readlink", "/opt/panellab-agent/current").stdout.strip()
-        self.check("current -> 0.1.0", link == "0.1.0", link)
+        self.check("current -> 0.1.1", link == "0.1.0", link)
         writable = dexec("sh", "-c", "test -w /opt/panellab-agent/current/panellab_agent && echo yes || echo no",
                          user="panellab", check=False).stdout.strip()
         self.check("program files not writable by panellab", writable == "no", writable)
@@ -323,8 +323,8 @@ class Lab:
 
     def verify_protocol_and_alerts(self) -> None:
         status = self.ctl("status")
-        self.check("status reports version 0.1.0 on %s" % HOSTNAME,
-                   status["version"] == "0.1.0" and status["hostname"] == HOSTNAME, json.dumps(status)[:300])
+        self.check("status reports version 0.1.1 on %s" % HOSTNAME,
+                   status["version"] == "0.1.1" and status["hostname"] == HOSTNAME, json.dumps(status)[:300])
         self.ctl("alerts.configure", {"smtp": {"host": "127.0.0.1", "port": 2525, "security": "none",
                                                "username": None, "from": "agent@lab.test",
                                                "to": ["admin@lab.test"]}})
@@ -625,7 +625,7 @@ class PanelLab(Lab):
         command = result.get("command", "")
         m = re.fullmatch(r"sudo bash (/home/admin/panellab-agent-0\.1\.0-[0-9a-f]{12}/install\.sh)", command)
         self.check("install returns the one sudo command for an uploaded bundle",
-                   bool(m) and result.get("version") == "0.1.0", json.dumps(result))
+                   bool(m) and result.get("version") == "0.1.1", json.dumps(result))
         if not m:
             raise LabError("unexpected install command")
         self.check("uploaded bundle is on the server", self.path_exists(m.group(1)))
@@ -636,7 +636,7 @@ class PanelLab(Lab):
                    r.stderr[-1500:] + r.stdout[-800:])
         status = self.agent("GET")
         self.check("panel status ok after install (new SSH session sees the group)",
-                   status.get("version") == "0.1.0" and status.get("hostname") == HOSTNAME,
+                   status.get("version") == "0.1.1" and status.get("hostname") == HOSTNAME,
                    json.dumps(status)[:300])
 
     def jobs_and_alerts(self) -> None:

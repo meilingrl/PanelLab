@@ -377,6 +377,14 @@ class Store:
         with self._lock:
             return [_run_dict(r) for r in self._db.execute(sql, args).fetchall()]
 
+    def last_runs(self) -> Dict[str, Dict[str, Any]]:
+        """The newest run row (any status) of every job that has one, in one query."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT %s FROM runs WHERE id IN (SELECT MAX(id) FROM runs GROUP BY job_id)"
+                % _RUN_COLS).fetchall()
+            return {r["job_id"]: _run_dict(r) for r in rows}
+
     def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
         with self._lock:
             row = self._db.execute("SELECT %s FROM runs WHERE id = ?" % _RUN_COLS,

@@ -294,3 +294,49 @@ def test_alerts_configure_accepts_recover_below_trigger(rig):
     a = rig.agent()
     ok(call(a, "alerts.configure", thresholds={"disk_percent": 80, "disk_recover_percent": 79,
                                                "cpu_percent": 85, "recover_below_percent": 84}))
+
+
+def test_jobs_list_carries_last_run_and_next_run(rig, tmp_path):
+    a = rig.agent()
+    ok(call(a, "jobs.create", job=job_def(tmp_path, id="manual")))
+    ok(call(a, "jobs.create", job=job_def(
+        tmp_path, id="daily", schedule={"cron": ["0 9 * * *"], "tz": "Asia/Shanghai"})))
+    ok(call(a, "jobs.create", job=job_def(
+        tmp_path, id="stopped", schedule={"cron": ["0 9 * * *"], "tz": "UTC"})))
+    ok(call(a, "jobs.pause", id="stopped"))
+    jobs = {j["id"]: j for j in ok(call(a, "jobs.list"))["jobs"]}
+    assert all(j["last_run"] is None for j in jobs.values())
+    assert jobs["manual"]["next_run"] is None          # empty cron
+    assert jobs["stopped"]["next_run"] is None         # paused
+    assert jobs["daily"]["next_run"] == {"utc": "2026-11-11T01:00:00+00:00",
+                                         "local": "2026-11-11T09:00:00+08:00"}
+    # Same value jobs.preview gives for the job's own schedule.
+    assert [jobs["daily"]["next_run"]] == ok(call(
+        a, "jobs.preview", schedule=jobs["daily"]["schedule"]))["runs"][:1]
+
+    st = a.store
+    r1 = st.insert_run("daily", "schedule", None, 1)
+    st.finish_run(r1, "succeeded", 0, 0, False)
+    r2 = st.insert_run("daily", "manual", None, 1)
+    st.finish_run(r2, "failed", 1, 0, False)
+    r3 = st.insert_run("manual", "manual", None, 1)
+    st.finish_run(r3, "cancelled", -15, 0, False)
+    r4 = st.insert_run("stopped", "manual", None, 1)  # still running
+    jobs = {j["id"]: j for j in ok(call(a, "jobs.list"))["jobs"]}
+    keys = {"run_id", "status", "trigger", "started_at", "ended_at"}
+    assert set(jobs["daily"]["last_run"]) == keys
+    assert jobs["daily"]["last_run"]["run_id"] == r2
+    assert jobs["daily"]["last_run"]["status"] == "failed"
+    assert jobs["daily"]["last_run"]["trigger"] == "manual"
+    assert jobs["daily"]["last_run"]["ended_at"] is not None
+    assert jobs["manual"]["last_run"]["status"] == "cancelled"
+    assert jobs["stopped"]["last_run"]["run_id"] == r4
+    assert jobs["stopped"]["last_run"]["status"] == "running"
+    assert jobs["stopped"]["last_run"]["ended_at"] is None
+    # jobs.get stays a plain view.
+    assert "last_run" not in ok(call(a, "jobs.get", id="daily"))
+
+
+def test_version_is_0_1_1():
+    from panellab_agent import __version__
+    assert __version__ == "0.1.1"

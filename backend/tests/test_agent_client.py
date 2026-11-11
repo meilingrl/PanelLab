@@ -212,7 +212,7 @@ def test_upload_bundle_extract_failure(monkeypatch):
 
 
 def test_version_parsed_not_imported():
-    assert agent_client.agent_version() == '0.1.0'
+    assert agent_client.agent_version() == '0.1.1'
 
 
 def test_different_blobs_get_different_directories(monkeypatch):
