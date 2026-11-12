@@ -1,0 +1,19 @@
+# DailyNews
+
+每日要闻简报：只用 Python 标准库（兼容 3.9），作为 PanelLab Agent 的普通作业运行。
+设计见 `docs/design/design-dailynews.md`。
+
+## 本地运行与测试
+
+```
+cd apps/dailynews
+python -m pytest -q
+python -m dailynews --settings default_settings.json check-settings
+```
+
+## 设置
+
+`default_settings.json` 是默认设置（含来源清单），安装时若没有 `/srv/dailynews/settings.json` 则复制。
+秘密只来自环境变量 `DAILYNEWS_LLM_API_KEY`、`DAILYNEWS_SMTP_PASSWORD`，设置文件里出现 `api_key` / `password` 会被拒绝。
+SMTP 的 host 留空时不校验 SMTP 其它字段；填写 host 后要求有发件人和至少一个收件人。
+来源地址是按各机构公开订阅地址填写的，尚未联网核实（Task 11 核实）。

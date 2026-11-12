@@ -39,6 +39,21 @@ jobs:
           pip install pytest
           cd agent && python -m pytest -q
 
+  dailynews:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Run dailynews tests
+        run: |
+          pip install pytest
+          cd apps/dailynews && python -m pytest -q
+
   backend:
     runs-on: ubuntu-latest
     steps:
