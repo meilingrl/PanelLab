@@ -46,6 +46,8 @@ class LLM:
             out = http.post_json(url, payload, headers, self.settings.timeout)
         except http.FetchError as e:
             status = e.status
+            if status is not None and 200 <= status < 300:
+                return None  # 2xx 但内容不是 JSON 对象：按坏输出处理，不当作传输错误
             retryable = status is None or status == 429 or status >= 500
             err = LLMError("大模型请求失败：HTTP %d" % status if status else "大模型请求失败：连接或超时")
             err.retryable = retryable

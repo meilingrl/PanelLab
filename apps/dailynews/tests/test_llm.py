@@ -71,6 +71,14 @@ def test_401_not_retried(http_server, store):
     assert len(http_server.requests) == 1 and sleeps == []
 
 
+def test_garbled_200_envelope_retried_once_without_sleep(http_server, store):
+    http_server.route("/v1/chat/completions", method="POST", handler=lambda r: (200, {}, b"<html>oops</html>"))
+    sleeps = []
+    with pytest.raises(LLMError):
+        make(http_server, store, sleeps=sleeps).chat_json("s", "u")
+    assert len(http_server.requests) == 2 and sleeps == []
+
+
 def test_non_json_raises_after_one_retry(http_server, store):
     http_server.route("/v1/chat/completions", method="POST",
                       handler=lambda r: (200, {}, ok_body("not json at all")))

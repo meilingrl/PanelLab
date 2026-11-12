@@ -123,9 +123,9 @@ def post_json(url, payload, headers, timeout):
     try:
         out = json.loads(body.decode("utf-8"))
     except ValueError:
-        raise FetchError("响应不是合法的 JSON")
+        raise FetchError("响应不是合法的 JSON", status=status)
     if not isinstance(out, dict):
-        raise FetchError("响应不是 JSON 对象")
+        raise FetchError("响应不是 JSON 对象", status=status)
     return out
 
 
