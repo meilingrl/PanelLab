@@ -1,7 +1,7 @@
 """SQLite 存储。时间一律存为 UTC 的 ISO-8601 字符串（YYYY-MM-DDTHH:MM:SSZ），可直接按字典序比较。"""
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 ARTICLE_RETENTION_DAYS = 30
@@ -90,6 +90,16 @@ class Article:
 
 
 @dataclass(frozen=True)
+class EventRow:
+    """跨天比对用的往期事件。"""
+    id: int
+    issue_date: date
+    title_zh: str
+    title_orig: Optional[str]
+    summary_zh: Optional[str]
+
+
+@dataclass(frozen=True)
 class Build:
     id: int
     started_at: datetime
@@ -146,6 +156,14 @@ class Store:
             "from articles where fetched_at >= ? order by id", (to_iso(t),)).fetchall()
         return [Article(r[0], r[1], r[2], r[3], r[4], from_iso(r[5]), from_iso(r[6]), r[7], r[8])
                 for r in rows]
+
+    def recent_events(self, before_issue: date, since_issue: date) -> List[EventRow]:
+        """期号在 [since_issue, before_issue) 内的事件，新期在前、同期按 id 倒序。当期事件不包括在内。"""
+        rows = self.conn.execute(
+            "select id, issue_date, title_zh, title_orig, summary_zh from events "
+            "where issue_date >= ? and issue_date < ? order by issue_date desc, id desc",
+            (since_issue.isoformat(), before_issue.isoformat())).fetchall()
+        return [EventRow(r[0], date.fromisoformat(r[1]), r[2], r[3], r[4]) for r in rows]
 
     def start_build(self, started_at, issue_date=None) -> int:
         with self.conn:
