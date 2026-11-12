@@ -11,7 +11,7 @@ NOW = datetime(2026, 11, 11, 0, 0, tzinfo=timezone.utc)
 
 def test_extracts_article_paragraphs():
     bbc = extract_text(fixture_bytes("article_bbc.html"), "https://www.bbc.com/news/world-1001")
-    assert bbc.startswith("Heavy rain has flooded dozens of towns and villages")
+    assert bbc.startswith("Heavy rain has flooded dozens of towns and villages across the southern region")
     assert "highest total recorded" in bbc
     guardian = extract_text(fixture_bytes("article_guardian.html"), "https://www.theguardian.com/world/x")
     assert guardian.startswith("Counting of ballots continued on Wednesday")
@@ -51,6 +51,48 @@ def test_no_article_uses_longest_container():
     text = extract_text(("<html><body>%s%s</body></html>" % (short, main)).encode(), "https://example.com/")
     assert text.startswith("Main story sentence")
     assert "sidebar" not in text
+
+
+def test_inline_elements_do_not_truncate_paragraphs():
+    filler = "<p>%s</p>" % ("Filler sentence for length. " * 12)
+    html = ("<html><body><article><p>Heavy <a href='/x'>rain</a> has flooded <em>towns</em> and "
+            "<strong>villages</strong>.</p><p>Second <b>para</b> ends here.</p>"
+            "<p>Text <script>x()</script> more text.</p>%s</article></body></html>" % filler).encode()
+    text = extract_text(html, "https://example.com/")
+    paras = text.split("\n\n")
+    assert paras[:3] == ["Heavy rain has flooded towns and villages.", "Second para ends here.",
+                         "Text more text."]
+
+
+def test_header_charset_used(tmp_path, http_server, no_politeness):
+    body = "<p>" + "这是一段很长的中文正文内容，用来验证字符集的识别。" * 20 + "</p>"
+    raw = ("<html><body><article>%s</article></body></html>" % body).encode("gbk")
+    assert extract_text(raw, "https://example.com/", "gbk").startswith("这是一段很长")
+    http_server.route("/g", body=raw, content_type="text/html; charset=gbk")
+    store = _store(tmp_path)
+    ids = _add(store, [http_server.url("/g")])
+    settings = make_settings([{"id": "s1", "url": "http://127.0.0.1/feed", "kind": "rss"}])
+    fetch_bodies(store, settings, ids)
+    assert store.get_articles(ids)[0].body_text.startswith("这是一段很长")
+
+
+def test_unexpected_error_isolated_per_article(tmp_path, http_server, no_politeness, monkeypatch):
+    from dailynews import http
+    http_server.route("/a", body=fixture_bytes("article_bbc.html"), content_type="text/html")
+    http_server.route("/b", body=fixture_bytes("article_bbc.html"), content_type="text/html")
+    real = http.get
+
+    def flaky(url, **kw):
+        if url.endswith("/a"):
+            raise ValueError("boom")
+        return real(url, **kw)
+    monkeypatch.setattr(http, "get", flaky)
+    store = _store(tmp_path)
+    ids = _add(store, [http_server.url("/a"), http_server.url("/b")])
+    settings = make_settings([{"id": "s1", "url": "http://127.0.0.1/feed", "kind": "rss"}])
+    fetch_bodies(store, settings, ids)
+    got = store.get_articles(ids)
+    assert [a.body_status for a in got] == ["failed", "ok"]
 
 
 def _store(tmp_path):

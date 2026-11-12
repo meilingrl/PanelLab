@@ -47,7 +47,6 @@ class _BodyParser(HTMLParser):
         self.stack.append((tag, self._next_id))
         if tag in _SKIP_TAGS:
             self._skip += 1
-            self._flush()
         elif tag == "article":
             self._article += 1
 
@@ -65,7 +64,8 @@ class _BodyParser(HTMLParser):
                 break
         if idx is None:
             return
-        self._flush()
+        if self._cur is not None and any(n == self._cur[0] for _, n in self.stack[idx:]):
+            self._flush()  # 段落所在的容器关闭了；行内元素（a/em/strong 等）关闭不打断段落
         for t, _ in self.stack[idx:]:
             if t in _SKIP_TAGS:
                 self._skip -= 1
@@ -82,9 +82,14 @@ class _BodyParser(HTMLParser):
         self._flush()
 
 
-def _decode(html_bytes):
+def _decode(html_bytes, charset=None):
     if html_bytes.startswith(codecs.BOM_UTF8):
         return html_bytes[3:].decode("utf-8", "replace")
+    if charset:
+        try:
+            return html_bytes.decode(charset, "replace")
+        except (LookupError, ValueError):
+            pass
     m = _META_CHARSET.search(html_bytes[:4096])
     if m:
         try:
@@ -109,10 +114,10 @@ def _cap(paragraphs):
     return "\n\n".join(out)
 
 
-def extract_text(html, url) -> Optional[str]:
+def extract_text(html, url, charset: Optional[str] = None) -> Optional[str]:
     parser = _BodyParser()
     try:
-        parser.feed(_decode(html))
+        parser.feed(_decode(html, charset))
         parser.close()
     except Exception:  # html.parser 对极端坏页面偶尔会抛错；当作提取失败
         return None
@@ -137,8 +142,8 @@ def fetch_bodies(store, settings, article_ids: List[int], throttle=None) -> None
             resp = http.get(article.url)
             if resp.status != 200:
                 raise FetchError("HTTP %d" % resp.status)
-            text = extract_text(resp.body, article.url)
-        except FetchError:
+            text = extract_text(resp.body, article.url, resp.charset)
+        except Exception:  # 单篇失败（含意外错误）不能中断整批
             store.set_body(article.id, None, "failed")
             continue
         if text is None:

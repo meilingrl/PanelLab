@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 from . import __version__
@@ -28,6 +29,7 @@ class Response:
     url: str
     body: bytes
     content_type: str
+    charset: Optional[str] = None
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -90,7 +92,8 @@ def get(url, *, timeout=None, max_bytes=None):
             except (OSError, http.client.HTTPException) as e:
                 raise FetchError("读取响应失败：%s" % e)
             ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
-            return Response(status, current, body, ctype)
+            charset = resp.headers.get_content_charset()
+            return Response(status, current, body, ctype, charset)
         finally:
             resp.close()
     raise FetchError("重定向超过 %d 次" % MAX_REDIRECTS)  # pragma: no cover
