@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+  <title>Example Blog</title>
+  <entry>
+    <title>New model released</title>
+    <link rel="alternate" href="https://blog.example.com/posts/model?utm_campaign=x"/>
+    <link rel="self" href="https://blog.example.com/feeds/model"/>
+    <updated>2026-11-10T09:15:00Z</updated>
+    <summary type="html">&lt;p&gt;We &lt;em&gt;released&lt;/em&gt; it.&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <title>Older post</title>
+    <link href="https://blog.example.com/posts/older"/>
+    <published>2026-11-01T00:00:00+00:00</published>
+    <content type="html">Body only</content>
+  </entry>
+</feed>
