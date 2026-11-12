@@ -102,10 +102,10 @@
      - 科技：Ars Technica、The Verge、MIT Technology Review、Wired。
      - AI：OpenAI、Anthropic、Google DeepMind、Google AI、Meta AI、Microsoft Research、NVIDIA、Hugging Face 的官方博客或新闻页。
 
-## 实现前要核实的两点（风险）
+## 已核实的服务器条件（2026-11-12，用户在服务器上运行检查）
 
-1. **服务器能否访问这些境外来源。** 如果阿里云服务器在中国大陆地域，BBC、Guardian、部分公司博客可能无法直接访问。实现开始时由用户在服务器上运行一条检查命令（我们提供）确认。不通时的办法（例如经服务器上已有的代理）另行商定，不擅自配置。DeepSeek 在国内可直接访问。
-2. **域名备案。** 如果服务器在中国大陆地域，`panellab.cn` 指向它并在 80/443 端口提供网站，需要该域名已完成 ICP 备案，否则会被阿里云拦截。需要用户确认备案状态和服务器地域；若无法备案，可改用 Tailscale 方式（原方案 b）或非标准端口，届时再定。
+- 地域 `ap-southeast-1`（新加坡），不在中国大陆：`panellab.cn` 指向它不需要 ICP 备案。
+- 境外来源可直接访问：BBC、Guardian、OpenAI、Anthropic 均返回 200；DeepSeek API 可达（未带密钥返回 401）。不需要代理。
 
 ## 交给实现者决定
 
