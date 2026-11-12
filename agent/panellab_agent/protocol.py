@@ -151,8 +151,37 @@ def op_status(agent, args):
     return agent.status()
 
 
+def _run_times(runs: List[datetime], tz: str) -> List[Dict[str, str]]:
+    zone = ZoneInfo(tz)
+    return [{"utc": t.astimezone(timezone.utc).isoformat(),
+             "local": t.astimezone(zone).isoformat()} for t in runs]
+
+
+def _job_next_run(agent, job: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """The next due time, computed as jobs.preview does; None when there is none."""
+    schedule = job.get("schedule") or {}
+    if job.get("paused") or not schedule.get("cron"):
+        return None
+    try:
+        runs = _next_runs(schedule, agent.clock.now(), 1)
+        return _run_times(runs, schedule["tz"])[0] if runs else None
+    except (cron.CronError, ValueError, KeyError, TypeError):
+        return None
+
+
 def op_jobs_list(agent, args):
-    return {"jobs": [job_view(agent, j) for j in agent.store.list_jobs()]}
+    last = agent.store.last_runs()
+    out = []
+    for j in agent.store.list_jobs():
+        view = job_view(agent, j)
+        r = last.get(j["id"])
+        view["last_run"] = None if r is None else {
+            "run_id": r["id"], "status": r["status"], "trigger": r["trigger"],
+            "started_at": r["started_at"], "ended_at": r["finished_at"],
+            "exit_code": r["exit_code"]}
+        view["next_run"] = _job_next_run(agent, j)
+        out.append(view)
+    return {"jobs": out}
 
 
 def op_jobs_get(agent, args):
@@ -230,14 +259,11 @@ def op_jobs_preview(agent, args):
         raise _invalid('schedule 必须是 {"cron": [str, ...], "tz": str}')
     try:
         runs = _next_runs(schedule, agent.clock.now(), 3)
-        zone = ZoneInfo(schedule["tz"]) if exprs else None
     except cron.CronError as exc:
         raise _invalid("计划无效：%s" % exc)
     if exprs and not runs:
         raise _invalid(NEVER_RUNS)
-    return {"tz": schedule["tz"],
-            "runs": [{"utc": t.astimezone(timezone.utc).isoformat(),
-                      "local": t.astimezone(zone).isoformat()} for t in runs]}
+    return {"tz": schedule["tz"], "runs": _run_times(runs, schedule["tz"]) if exprs else []}
 
 
 # --------------------------------------------------------------- run ops

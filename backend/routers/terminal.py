@@ -1,4 +1,4 @@
-"""WebSocket shell with a single-use ticket and the shared pinned transport."""
+"""WebSocket shell with a single-use ticket and a dedicated pinned transport."""
 import asyncio
 import json
 import shlex
@@ -57,7 +57,8 @@ async def terminal_ws(websocket: WebSocket, ticket: str = Query(..., max_length=
     tasks = []
     try:
         user, server_id, cwd = consume_ticket(db, ticket, server_id)
-        context = open_remote(db, user, server_id)
+        # The PTY keeps its own connection for its whole life; it never borrows a pooled one.
+        context = open_remote(db, user, server_id, dedicated=True)
         client = await asyncio.to_thread(context.__enter__)
 
         def start_shell():

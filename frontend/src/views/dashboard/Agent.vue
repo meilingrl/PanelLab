@@ -1,6 +1,7 @@
 <script setup>
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, toRaw, watch, onMounted, onBeforeUnmount } from 'vue'
 import { agentApi } from '../../composables/useAgentApi'
+import { getAgentCache, setAgentCache, deleteAgentCache, getLastServer, setLastServer } from '../../composables/agentCache'
 import { request, formatTime } from '../../composables/useWorkspaceApi'
 import '../../components/workspaces/workspaces.css'
 import JobList from '../../components/agent/JobList.vue'
@@ -9,8 +10,11 @@ import JobForm from '../../components/agent/JobForm.vue'
 import AlertSettings from '../../components/agent/AlertSettings.vue'
 import AgentInstall from '../../components/agent/AgentInstall.vue'
 
-const hosts = ref([]), serverKey = ref(''), loading = ref(false), hostsError = ref('')
+const hosts = ref([]), serverKey = ref(''), loading = ref(false), refreshing = ref(false), hostsError = ref('')
 const agentStatus = ref(null), jobs = ref([]), error = ref(null), notice = ref('')
+// noticeCode: error code of a failed background refresh; dataAt: when the shown data was fetched (ms).
+const noticeCode = ref(''), dataAt = ref(null)
+const setNotice = e => { notice.value = e ? errorText(e) : ''; noticeCode.value = e?.code || '' }
 const lastRuns = ref({}), previews = ref({}), selectedId = ref(null)
 // `editing` is null, 'new' or a job object (JobForm); `settings` toggles AlertSettings.
 const editing = ref(null), settings = ref(false), showUpgrade = ref(false)
@@ -29,13 +33,30 @@ const ERROR_TEXT = {
 }
 const errorText = e => (e.code === 'agent_permission' ? (e.message && !/^请求失败 \(/.test(e.message) ? e.message : ERROR_TEXT.agent_permission) : ERROR_TEXT[e.code]) || e.message || '请求失败'
 
+// These errors are about the Agent's installation itself: show the install panel instead of the stale view.
+const INSTALL_CODES = ['agent_not_installed', 'protocol_mismatch']
 let generation = 0, controller = null
 async function pool(tasks, size = 4) { const queue = [...tasks]; await Promise.all(Array.from({ length: Math.min(size, queue.length) }, async () => { while (queue.length) await queue.shift()() })) }
 // Job views carry neither a next run time nor the latest result, so both are fetched per job (4 at a time):
 // next run via schedule-preview, cached per job revision; last result via runs?limit=1.
+// Agents from 0.1.1 on put `last_run` and `next_run` into every job of `jobs.list`; those need no extra requests.
+const enrichedJob = j => 'last_run' in j || 'next_run' in j
+function applyEnriched() {
+  const last = { ...lastRuns.value }, prev = { ...previews.value }
+  for (const j of jobs.value) {
+    if (!enrichedJob(j)) continue
+    last[j.id] = j.last_run ? { id: j.last_run.run_id, job_id: j.id, status: j.last_run.status, trigger: j.last_run.trigger, started_at: j.last_run.started_at, finished_at: j.last_run.ended_at, exit_code: j.last_run.exit_code ?? null } : null
+    prev[previewKey(j)] = j.next_run?.local || '无'
+  }
+  lastRuns.value = last; previews.value = prev
+}
+function saveCache(id) {
+  if (agentStatus.value) setAgentCache(id, { status: toRaw(agentStatus.value), jobs: toRaw(jobs.value), lastRuns: { ...lastRuns.value }, previews: { ...previews.value } })
+}
 function loadExtras(seq, signal, id) {
   const tasks = []
   for (const job of jobs.value) {
+    if (enrichedJob(job)) continue
     tasks.push(async () => {
       try { const r = await agentApi.runs(id, job.id, { limit: 1 }, signal); if (seq === generation) lastRuns.value = { ...lastRuns.value, [job.id]: r.runs?.[0] || null } } catch (_) { /* keep placeholder */ }
     })
@@ -47,32 +68,39 @@ function loadExtras(seq, signal, id) {
   return pool(tasks)
 }
 async function fetchAll(seq, signal, id) {
-  const [st, list] = await Promise.all([agentApi.status(id, signal), agentApi.jobs(id, signal)])
+  // Both requests go out at once; a status error (e.g. Agent not installed) wins over a jobs error.
+  const [st, list] = await Promise.allSettled([agentApi.status(id, signal), agentApi.jobs(id, signal)])
   if (seq !== generation) return
-  agentStatus.value = st; jobs.value = list.jobs || []
+  if (st.status === 'rejected') throw st.reason
+  if (list.status === 'rejected') throw list.reason
+  agentStatus.value = st.value; jobs.value = list.value.jobs || []; dataAt.value = Date.now()
   if (selectedId.value && !selectedJob.value) selectedId.value = null
+  applyEnriched(); saveCache(id)
   await loadExtras(seq, signal, id)
+  if (seq === generation) saveCache(id)
+}
+function applyCache(entry) {
+  agentStatus.value = { ...entry.status }; jobs.value = [...entry.jobs]; dataAt.value = entry.savedAt ?? null; lastRuns.value = { ...entry.lastRuns }; previews.value = { ...entry.previews }
 }
 async function load() {
   const seq = ++generation; controller?.abort(); controller = new AbortController()
-  agentStatus.value = null; jobs.value = []; error.value = null; notice.value = ''; lastRuns.value = {}; previews.value = {}
-  selectedId.value = null; editing.value = null; settings.value = false; showUpgrade.value = false
+  agentStatus.value = null; jobs.value = []; error.value = null; setNotice(null); lastRuns.value = {}; previews.value = {}
+  selectedId.value = null; editing.value = null; settings.value = false; showUpgrade.value = false; refreshing.value = false
   if (!serverKey.value) { loading.value = false; return }
+  setLastServer(serverKey.value)
+  const cached = getAgentCache(serverId.value)
+  if (cached) { applyCache(cached); refreshing.value = true }   // show the last data at once, refresh behind it
   loading.value = true
-  try {
-    // Status first: a missing or unreachable Agent must not also surface a jobs error.
-    const st = await agentApi.status(serverId.value, controller.signal); if (seq !== generation) return
-    agentStatus.value = st
-    const list = await agentApi.jobs(serverId.value, controller.signal); if (seq !== generation) return
-    jobs.value = list.jobs || []
-    await loadExtras(seq, controller.signal, serverId.value)
-  } catch (e) { if (seq === generation && e.name !== 'AbortError') error.value = e }
-  finally { if (seq === generation) loading.value = false }
+  try { await fetchAll(seq, controller.signal, serverId.value) }
+  catch (e) {
+    if (seq === generation && e.name !== 'AbortError') { if (cached && !INSTALL_CODES.includes(e.code)) setNotice(e); else { if (INSTALL_CODES.includes(e.code)) deleteAgentCache(serverId.value); error.value = e } }
+  }
+  finally { if (seq === generation) { loading.value = false; refreshing.value = false } }
 }
 async function refresh() {
   const seq = generation, signal = controller.signal
-  try { await fetchAll(seq, signal, serverId.value); if (seq === generation) notice.value = '' }
-  catch (e) { if (seq === generation && e.name !== 'AbortError') notice.value = errorText(e) }
+  try { await fetchAll(seq, signal, serverId.value); if (seq === generation) setNotice(null) }
+  catch (e) { if (seq === generation && e.name !== 'AbortError') setNotice(e) }
 }
 const mailFailed = computed(() => { const m = agentStatus.value?.mail; return m && m.at && m.ok === false ? m : null })
 const heartbeatFailed = computed(() => { const h = agentStatus.value?.heartbeat; return h && h.configured && h.ok === false ? h : null })
@@ -86,12 +114,17 @@ async function formSaved(saved) {
   if (wasNew && saved?.id && jobs.value.some(j => j.id === saved.id)) selectedId.value = saved.id
 }
 function deleted() { selectedId.value = null; refresh() }
+// Coming back to the page: pick the last server again and show its cached data before anything is fetched.
+{ const last = getLastServer(), cached = last && getAgentCache(Number(last.split(':')[1])); if (cached) { serverKey.value = last; applyCache(cached); refreshing.value = true } }
 onMounted(async () => {
+  if (serverKey.value) load()   // refresh in the background while the host list loads
   try {
     const data = await request('/monitor/hosts')
     hosts.value = (data.hosts || []).filter(h => h.id !== 'local')
-    const first = hosts.value.find(h => h.pinned !== false)
-    if (first) { serverKey.value = first.id; load() }
+    const usable = h => h.pinned !== false
+    if (serverKey.value && hosts.value.some(h => h.id === serverKey.value && usable(h))) return
+    const first = hosts.value.find(usable)
+    if (first) { serverKey.value = first.id; load() } else if (serverKey.value) { serverKey.value = ''; load() }
   } catch (e) { hostsError.value = e.message }
 })
 // While the status lists running runs, re-poll it every 5 s (never overlapping, skipped while the page is hidden)
@@ -127,9 +160,12 @@ onBeforeUnmount(() => { unmounted = true; generation++; controller?.abort(); cle
       <p v-if="error.message && error.code !== 'agent_permission' && ERROR_TEXT[error.code]" class="ws-muted">详情：{{ error.message }}</p>
       <AgentInstall v-if="error.code === 'protocol_mismatch'" :key="serverId" :server-id="serverId" :host="hostLabel" upgrade @recheck="load" /></section>
     <template v-else-if="agentStatus">
-      <p v-if="notice" class="ws-error" role="alert">{{ notice }}</p>
-      <div class="ws-row ws-wrap agent-statusbar" data-testid="agent-status"><span class="ws-badge good">Agent 运行中</span>
-        <span>{{ agentStatus.hostname }}</span><span class="ws-muted">版本 {{ agentStatus.version }}</span><span class="ws-muted">{{ agentStatus.job_count ?? jobs.length }} 个作业</span>
+      <p v-if="notice" class="ws-error" role="alert" data-testid="agent-notice">{{ notice }}<template v-if="noticeCode === 'trust_required'"> <router-link to="/workspaces">前往任务工作区</router-link></template></p>
+      <div class="ws-row ws-wrap agent-statusbar" data-testid="agent-status">
+        <!-- While a refresh failed, the shown data is old: do not claim the Agent is running. -->
+        <span v-if="notice" class="ws-badge" data-testid="agent-stale">上次数据 · {{ dataAt ? new Date(dataAt).toLocaleString() : '未知' }}</span>
+        <span v-else class="ws-badge good">Agent 运行中</span>
+        <span>{{ agentStatus.hostname }}</span><span class="ws-muted">版本 {{ agentStatus.version }}</span><span v-if="refreshing" class="ws-muted" data-testid="agent-refreshing">更新中…</span><span class="ws-muted">{{ agentStatus.job_count ?? jobs.length }} 个作业</span>
         <span class="ws-muted">正在运行 {{ (agentStatus.running || []).length }}</span><span v-if="agentStatus.draining" class="ws-badge warn">正在排空</span>
         <span v-if="heartbeatFailed" class="ws-badge warn" data-testid="agent-heartbeat-failed">心跳请求失败（{{ formatTime(heartbeatFailed.at) }}）</span>
         <button data-testid="agent-upgrade" @click="showUpgrade = !showUpgrade">升级 / 重新安装 Agent</button></div>

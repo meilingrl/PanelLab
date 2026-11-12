@@ -50,7 +50,10 @@ MYSQL_IMAGE = "mysql:8.4.9"
 HOSTNAME = "agent-lab"
 SERVICE = "panellab-agent.service"
 RELOGIN_NOTE = "请重新登录 SSH 使组权限生效"
-UPGRADE_VERSION = "0.1.1-lab"
+AGENT_VERSION = re.search(r'__version__\s*=\s*"([^"]+)"',
+                          (ROOT / "agent" / "panellab_agent" / "__init__.py").read_text()).group(1)
+_v = [int(x) for x in AGENT_VERSION.split(".")]
+UPGRADE_VERSION = "%d.%d.%d-lab" % (_v[0], _v[1], _v[2] + 1)
 FIXTURE_PASSWORD = "panellab-fixture-only"  # set in the fixture's Dockerfile; fixture only
 
 READ_MAIL = r"""
@@ -299,7 +302,7 @@ class Lab:
                       "/opt/panellab-agent root:root 755", "/usr/local/bin/panellab-agentctl root:root 755"]
         self.check("directory owners and modes", [p for p in perms if p] == want_perms, json.dumps(perms))
         link = dexec("readlink", "/opt/panellab-agent/current").stdout.strip()
-        self.check("current -> 0.1.0", link == "0.1.0", link)
+        self.check("current -> %s" % AGENT_VERSION, link == AGENT_VERSION, link)
         writable = dexec("sh", "-c", "test -w /opt/panellab-agent/current/panellab_agent && echo yes || echo no",
                          user="panellab", check=False).stdout.strip()
         self.check("program files not writable by panellab", writable == "no", writable)
@@ -323,8 +326,8 @@ class Lab:
 
     def verify_protocol_and_alerts(self) -> None:
         status = self.ctl("status")
-        self.check("status reports version 0.1.0 on %s" % HOSTNAME,
-                   status["version"] == "0.1.0" and status["hostname"] == HOSTNAME, json.dumps(status)[:300])
+        self.check("status reports version %s on %s" % (AGENT_VERSION, HOSTNAME),
+                   status["version"] == AGENT_VERSION and status["hostname"] == HOSTNAME, json.dumps(status)[:300])
         self.ctl("alerts.configure", {"smtp": {"host": "127.0.0.1", "port": 2525, "security": "none",
                                                "username": None, "from": "agent@lab.test",
                                                "to": ["admin@lab.test"]}})
@@ -623,9 +626,9 @@ class PanelLab(Lab):
                    resp.status_code == 404 and code == "agent_not_installed", resp.text[:300])
         result = self.agent("POST", "/install")
         command = result.get("command", "")
-        m = re.fullmatch(r"sudo bash (/home/admin/panellab-agent-0\.1\.0-[0-9a-f]{12}/install\.sh)", command)
+        m = re.fullmatch(r"sudo bash (/home/admin/panellab-agent-%s-[0-9a-f]{12}/install\.sh)" % re.escape(AGENT_VERSION), command)
         self.check("install returns the one sudo command for an uploaded bundle",
-                   bool(m) and result.get("version") == "0.1.0", json.dumps(result))
+                   bool(m) and result.get("version") == AGENT_VERSION, json.dumps(result))
         if not m:
             raise LabError("unexpected install command")
         self.check("uploaded bundle is on the server", self.path_exists(m.group(1)))
@@ -636,7 +639,7 @@ class PanelLab(Lab):
                    r.stderr[-1500:] + r.stdout[-800:])
         status = self.agent("GET")
         self.check("panel status ok after install (new SSH session sees the group)",
-                   status.get("version") == "0.1.0" and status.get("hostname") == HOSTNAME,
+                   status.get("version") == AGENT_VERSION and status.get("hostname") == HOSTNAME,
                    json.dumps(status)[:300])
 
     def jobs_and_alerts(self) -> None:

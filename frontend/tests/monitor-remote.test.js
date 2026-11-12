@@ -88,7 +88,7 @@ it('rebuilds the traffic chart after a failed poll replaces its canvas, and tole
     let fail = false
     fetch.mockImplementation(async (url, o = {}) => {
       if (url === '/api/monitor/stats?target=server%3A71') return fail
-        ? response({ detail: { code: 'connection_failed', message: 'SSH connection or authentication failed' } }, false)
+        ? response({ detail: { code: 'connection_failed', message: '连接服务器超时' } }, false)
         : response({ ...remote, disk: [{ mountpoint: '/empty', total_gb: 0.1, used_gb: 0, free_gb: 0, percent: null }],
           network: { ...remote.network, network_history: history } })
       if (url === '/api/monitor/remote-config') return response({ legacy_configured: false })
@@ -101,7 +101,7 @@ it('rebuilds the traffic chart after a failed poll replaces its canvas, and tole
     expect(charts).toHaveLength(1)
     expect(w.findAll('.gauge-value-sm').at(-1).text()).toBe('—')
     fail = true; await vi.advanceTimersByTimeAsync(5000); await flushPromises()
-    expect(w.text()).toContain('SSH connection or authentication failed')
+    expect(w.text()).toContain('连接服务器超时')
     fail = false; await vi.advanceTimersByTimeAsync(5000); await flushPromises()
     expect(charts).toHaveLength(2)
     expect(charts[0].destroyed).toBe(true)

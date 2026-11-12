@@ -122,6 +122,8 @@ def test_key_mode_authenticates_only_after_pinned_host(remote, network, auth_eve
     public = key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
     assert public.split()[1] == auth_events[-1][3]
     import paramiko
+    # A changed host key is checked on the next new connection, not on a pooled one.
+    network.reset_pool()
     FakeTransport.key = paramiko.RSAKey.generate(1024)
     changed = remote.post('/api/servers/71/connection/check')
     assert code(changed) == 'host_key_changed'

@@ -90,12 +90,14 @@ def test_maps_exit_codes_127_3_4(monkeypatch):
         (4, b'{"code":"agent_permission","message":"RAWSECRET"}', ('agent_permission', 403)),
         (2, b'{"code":"bad_input","message":"RAWSECRET"}', ('agent_protocol', 502)),
     ]:
-        install(monkeypatch, [Channel(stdout=b'RAWSECRET', stderr=stderr, status=status)])
+        # agent_permission is retried once on a fresh login (pooled logins keep old groups).
+        tries = 2 if expect[0] == 'agent_permission' else 1
+        install(monkeypatch, [Channel(stdout=b'RAWSECRET', stderr=stderr, status=status) for _ in range(tries)])
         with pytest.raises(HTTPException) as exc:
             agent_client.call(None, None, 1, 'status')
         assert code_of(exc) == expect
         assert 'RAWSECRET' not in json.dumps(exc.value.detail)
-    install(monkeypatch, [Channel(status=4)])
+    install(monkeypatch, [Channel(status=4), Channel(status=4)])
     with pytest.raises(HTTPException) as exc:
         agent_client.call(None, None, 1, 'status')
     assert '请重新登录 SSH 或确认已加入 panellab 组' in exc.value.detail['message']
@@ -212,7 +214,7 @@ def test_upload_bundle_extract_failure(monkeypatch):
 
 
 def test_version_parsed_not_imported():
-    assert agent_client.agent_version() == '0.1.0'
+    assert agent_client.agent_version() == '0.1.1'
 
 
 def test_different_blobs_get_different_directories(monkeypatch):

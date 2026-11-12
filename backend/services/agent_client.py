@@ -14,7 +14,9 @@ from pathlib import Path
 
 import paramiko
 
-from services.remote_connection import CONNECT_TIMEOUT, fail, open_remote, remote_deadline
+from fastapi import HTTPException
+
+from services.remote_connection import CONNECT_TIMEOUT, fail, invalidate, open_remote, remote_deadline
 
 PROTOCOL_VERSION = 1
 CTL_PATH = '/usr/local/bin/panellab-agentctl'
@@ -125,14 +127,24 @@ def call(db, user, server_id, op, args=None):
     request = json.dumps({'protocol_version': PROTOCOL_VERSION, 'op': op, 'args': args or {}},
                          ensure_ascii=False, separators=(',', ':')).encode('utf-8') + b'\n'
     timeout = LONG_TIMEOUT.get(op, CALL_TIMEOUT)
-    with open_remote(db, user, server_id) as client:
+    for attempt in (1, 2):
+        with open_remote(db, user, server_id) as client:
+            try:
+                with remote_deadline(client, timeout):
+                    status, stdout, stderr = _run(client, CTL_PATH, request, timeout)
+            except (paramiko.SSHException, OSError, EOFError):
+                fail('agent_unreachable', '与服务器的 SSH 连接中断', 503)
         try:
-            with remote_deadline(client, timeout):
-                status, stdout, stderr = _run(client, CTL_PATH, request, timeout)
-        except (paramiko.SSHException, OSError, EOFError):
-            fail('agent_unreachable', '与服务器的 SSH 连接中断', 503)
-    _map_exit(status, stderr)
-    return _parse(stdout)
+            _map_exit(status, stderr)
+        except HTTPException as exc:
+            # A pooled login keeps the supplementary groups it had when it authenticated, so
+            # it cannot see install.sh adding the user to group panellab. Retry once on a
+            # fresh login before reporting a permission problem.
+            if attempt == 1 and exc.detail.get('code') == 'agent_permission':
+                invalidate(server_id)
+                continue
+            raise
+        return _parse(stdout)
 
 
 # ------------------------------------------------------------------ install bundle

@@ -15,6 +15,7 @@ from models.server import Server
 from models.user import User
 from routers.auth import get_current_user
 from schemas.servers import ServerCreate, ServerItem, ServerListResponse, ServerUpdate
+from services.remote_connection import invalidate
 from utils.cipher import encrypt_password
 
 
@@ -75,6 +76,7 @@ def update_server(
         raise HTTPException(status_code=404, detail="服务器不存在")
     _fill_from_body(row, body)
     db.commit()
+    invalidate(row.id)
     db.refresh(row)
     return ServerItem.model_validate(row)
 
@@ -98,7 +100,9 @@ def delete_server(
     from models.server_key import ServerPrivateKey
     # Do not rely on database FK cascades (SQLite tests do not enforce them) for key material.
     db.query(ServerPrivateKey).filter(ServerPrivateKey.server_id == row.id).delete()
+    server_id = row.id
     db.delete(row)
     db.commit()
+    invalidate(server_id)
     return {"message": "服务器已删除"}
 

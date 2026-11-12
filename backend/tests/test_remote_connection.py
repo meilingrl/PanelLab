@@ -44,6 +44,7 @@ class FakeTransport:
         self.events.append(('password', username, password, fallback))
     def auth_none(self, username): self.events.append(('none', username))
     def is_authenticated(self): return True
+    def is_active(self): return not self.closed
     def close(self): self.closed = True
 
 
@@ -109,6 +110,7 @@ def test_tailscale_explicit_none_and_errors_sanitized(remote, network, monkeypat
     with SessionLocal() as db:
         with network.open_remote(db, db.get(User, 1), 71): pass
     assert FakeTransport.events[-1] == ('none', 'runner')
+    network.reset_pool()  # force a new login so the failing auth_none below runs
     monkeypatch.setattr(FakeTransport, 'auth_none', lambda *a: (_ for _ in ()).throw(RuntimeError('PRIVATE_PASSWORD')))
     result = remote.post('/api/servers/71/connection/check')
     assert result.status_code == 503
@@ -217,7 +219,7 @@ def test_terminal_initial_directory_write_has_deadline(remote, network, monkeypa
     shell = Shell()
     client = SimpleNamespace(get_transport=lambda: SimpleNamespace(close=closed.set), invoke_shell=lambda **kw: shell)
     @contextmanager
-    def opened(*args): yield client
+    def opened(*args, **kwargs): yield client
     @contextmanager
     def sftp(*args):
         yield SimpleNamespace(normalize=lambda p: p, lstat=lambda p: SimpleNamespace(st_mode=stat.S_IFDIR))
@@ -284,7 +286,7 @@ def prepare_terminal(remote, monkeypatch, shell, cwd):
     ticket = remote.post('/api/servers/71/terminal-ticket', json={'cwd': cwd}).json()['ticket']
     client = SimpleNamespace(get_transport=lambda: SimpleNamespace(close=shell.close), invoke_shell=lambda **kw: shell)
     @contextmanager
-    def opened(*args): yield client
+    def opened(*args, **kwargs): yield client
     @contextmanager
     def sftp(*args):
         yield SimpleNamespace(normalize=lambda path: path, lstat=lambda path: SimpleNamespace(st_mode=stat.S_IFDIR))

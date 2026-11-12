@@ -17,13 +17,13 @@
 前提：服务器是带 systemd 的 Linux，有 `python3`（3.9 或更新，不需要 pip），并且已在「任务工作区」添加这台服务器、确认了指纹。
 
 1. 在侧边栏打开「服务器 Agent」，选中服务器。未安装时页面显示「这台服务器的 Agent 未安装」。
-2. 点「上传安装包」。PanelLab 只把安装包上传到你 SSH 用户的主目录（例如 `~/panellab-agent-0.1.0-<校验码>/`），不执行任何东西。
+2. 点「上传安装包」。PanelLab 只把安装包上传到你 SSH 用户的主目录（例如 `~/panellab-agent-0.1.1-<校验码>/`），不执行任何东西。
 3. 页面给出**一条** `sudo bash …/install.sh` 命令。点「复制命令」，或点「在终端打开」，在终端里自己运行它，sudo 密码只在终端里输入。安装脚本会：
    - 创建系统用户和组 `panellab`（不会动服务器上已有的其他账户，例如 `agent`）；
    - 把 `panellab` 加入 `adm` 组（只为读取 SSH 登录失败记录），把你的 SSH 用户加入 `panellab` 组；
    - 把程序装到 `/opt/panellab-agent/`，数据放在 `/var/lib/panellab-agent/`，配置放在 `/etc/panellab-agent/`；
    - 安装并启动 systemd 服务 `panellab-agent`（崩溃后自动重启）。
-4. 运行完成后，**重新连接 SSH**（新开终端或重新登录），新加的组才会生效；然后在页面点「重新检查」。PanelLab 每次操作都会新建 SSH 连接，所以页面这边通常直接就能用。
+4. 运行完成后，**重新连接 SSH**（新开终端或重新登录），新加的组才会生效；然后在页面点「重新检查」。PanelLab 会复用 SSH 连接；安装后遇到权限错误时会自动用新的 SSH 登录重试一次，所以页面这边通常直接就能用。
 
 ## 升级
 
@@ -74,7 +74,11 @@ Agent 已安装时，点状态栏上的「升级 / 重新安装 Agent」，会�
 
 ## 告警
 
-在「告警设置」里填写 SMTP（主机、端口、安全方式 STARTTLS / SSL / 无、用户名、密码、发件人、最多 10 个收件人），先保存，再点「发送测试邮件」确认能收到。SMTP 密码只保存在服务器上，页面只显示“已设置”。
+在「告警设置」里只需填两项：**邮箱地址**和该邮箱的**授权码 / 应用专用密码**（不是登录密码）。收件人默认就是这个邮箱，也可以再加（每行一个或用逗号分隔，最多 10 个）。先保存，再点「发送测试邮件」确认能收到（测试使用已保存的设置）。授权码只保存在服务器上，页面只显示“已设置”；可选择保持不变、改为新值或删除。
+
+- 根据邮箱域名自动填好服务器：qq.com / foxmail.com → smtp.qq.com，163.com、126.com、yeah.net → 各自的 smtp 服务器，gmail.com / googlemail.com → smtp.gmail.com，aliyun.com → smtp.aliyun.com，都用 465 端口、SSL，用户名和发件人就是邮箱地址。输入地址后页面会提示去哪里开启 SMTP 并获取授权码（Gmail 需先开启两步验证，再生成应用专用密码）。
+- 阿里云服务器默认封禁 25 端口，请使用 465。
+- 其他邮箱服务商不在预设里：「高级设置」会自动展开，按服务商提供的信息填写主机、端口、安全方式（STARTTLS / SSL / 无）、用户名和发件人。「高级设置」平时折叠；已保存的设置与预设不一致时也会自动展开。
 
 | 告警 | 什么时候发 | 什么时候算恢复 |
 | --- | --- | --- |
@@ -111,6 +115,8 @@ Agent 已安装时，点状态栏上的「升级 / 重新安装 Agent」，会�
 | --- | --- |
 | `agent_not_installed` | 这台服务器上没有 `panellab-agentctl`。按“安装”一节上传并运行命令。 |
 | `agent_permission` | 你的 SSH 用户还不在 `panellab` 组里，或者组权限还没生效。重新登录 SSH 后再试；用 `id` 确认输出里有 `panellab`，没有就重新运行安装命令。 |
+| `connection_refused_by_server`（「服务器暂时拒绝了新的 SSH 连接」） | 服务器正在限制新的 SSH 连接，PanelLab 已经自动等待并重试过一次。稍等片刻再试即可。经常出现说明短时间内新建的连接太多（可能还有别的程序在连这台服务器），在服务器上用 `sudo journalctl -u ssh -n 100`（有的系统是 `-u sshd`）查看是否有 penalty 或 MaxStartups 相关记录。 |
+| `remote_busy`（「服务器上的 SSH 请求过多」） | 同一条 SSH 连接上同时进行的请求已达上限，新的请求排队超过 30 秒。通常是有很慢的操作占着连接；等它们结束后再试。 |
 | `agent_unreachable` | 连不上 Agent 的 socket，多半是服务没在运行。在服务器上运行 `sudo systemctl status panellab-agent` 和 `sudo journalctl -u panellab-agent -n 50` 查看原因，`sudo systemctl restart panellab-agent` 重启。 |
 | 状态栏显示「正在排空」，或操作报 `draining` | 有一次升级或卸载在等待作业结束，期间不启动新运行。排空由安装脚本持续续期：脚本失败时会立即恢复调度；脚本被强行中断时，Agent 在 30 秒内自动退出排空并发一封「Agent 已退出排空状态」通知。也可以在服务器上运行 `panellab-agentctl undrain` 立即恢复。 |
 | 用 `systemctl restart` / `stop` 或重启服务器时有作业在运行 | Agent 停止调度，给正在运行的作业最多 60 秒自行结束，之后中断剩下的（记为「已取消」，输出末尾有 `[Agent 停止，作业被中断]`，不发失败告警），并发一封「Agent 停止时中断了作业」通知列出它们。计划内的升级请用本页的升级入口或 `install.sh`，它们会先等作业结束。 |
