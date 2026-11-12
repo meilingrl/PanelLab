@@ -52,13 +52,17 @@ def api_health():
     return {"status": "ok"}
 
 
+# Every top-level path in frontend/src/router/index.js; test_workspace_spa checks they match.
+FRONTEND_ROUTES = ('login', 'register', 'workspaces', 'agent', 'monitor', 'sites', 'databases',
+                   'terminal', 'manual', 'feedback', 'settings')
+
+
 def mount_frontend(application: FastAPI, directory: Path):
     def frontend_shell():
         return FileResponse(directory / 'index.html')
 
     # Vue history routes also need to work when opened from a bookmark.
-    for route in ('login', 'register', 'workspaces', 'monitor', 'sites', 'databases',
-                  'terminal', 'manual', 'feedback', 'settings'):
+    for route in FRONTEND_ROUTES:
         for path in ('/' + route, '/' + route + '/'):
             application.add_api_route(path, frontend_shell, methods=['GET', 'HEAD'], include_in_schema=False)
     application.mount('/', StaticFiles(directory=directory, html=True))
