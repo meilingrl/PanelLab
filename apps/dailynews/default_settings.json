@@ -93,7 +93,7 @@
       "kind": "rss",
       "category": "world",
       "type": "media",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "un-news",
@@ -147,16 +147,16 @@
       "kind": "rss",
       "category": "finance",
       "type": "official",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "ecb",
       "name": "欧洲央行 ECB",
-      "url": "https://www.ecb.europa.eu/rss/press.html",
+      "url": "https://www.ecb.europa.eu/rss/press.xml",
       "kind": "rss",
       "category": "finance",
       "type": "official",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "imf",
@@ -165,7 +165,7 @@
       "kind": "rss",
       "category": "finance",
       "type": "official",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "ars",
@@ -228,7 +228,7 @@
       "kind": "rss",
       "category": "ai",
       "type": "company",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "google-ai",
@@ -237,7 +237,7 @@
       "kind": "rss",
       "category": "ai",
       "type": "company",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "meta-ai",

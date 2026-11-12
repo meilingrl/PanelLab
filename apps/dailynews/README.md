@@ -17,3 +17,6 @@ python -m dailynews --settings default_settings.json check-settings
 秘密只来自环境变量 `DAILYNEWS_LLM_API_KEY`、`DAILYNEWS_SMTP_PASSWORD`，设置文件里出现 `api_key` / `password` 会被拒绝。
 SMTP 的 host 留空时不校验 SMTP 其它字段；填写 host 后要求有发件人和至少一个收件人。
 来源地址是按各机构公开订阅地址填写的，尚未联网核实（Task 11 核实）。
+
+来源清单里没有 Reuters、AP、AFP：它们没有公开的官方订阅地址，不虚构地址；`agency`（通讯社）仍是合法的来源类型，以后有官方订阅时可直接加入。
+地址不确定的来源（NHK World、ECB、美联储、IMF、Google DeepMind、Google AI）先设为 `"enabled": false`，由 Task 11 的 check-sources 核实后再启用。
