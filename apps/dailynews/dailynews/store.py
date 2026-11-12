@@ -123,6 +123,22 @@ class Store:
                     ids.append(cur.lastrowid)
         return ids
 
+    def get_articles(self, ids) -> List[Article]:
+        """按给定 id 的顺序返回文章；不存在的 id 跳过。"""
+        found = {}
+        for i in ids:
+            r = self.conn.execute(
+                "select id, source_id, url, title, summary, published_at, fetched_at, body_text, body_status "
+                "from articles where id = ?", (i,)).fetchone()
+            if r is not None:
+                found[i] = Article(r[0], r[1], r[2], r[3], r[4], from_iso(r[5]), from_iso(r[6]), r[7], r[8])
+        return [found[i] for i in ids if i in found]
+
+    def set_body(self, article_id, body_text, body_status):
+        with self.conn:
+            self.conn.execute("update articles set body_text=?, body_status=? where id=?",
+                              (body_text, body_status, article_id))
+
     def articles_since(self, t) -> List[Article]:
         """抓取时间不早于 t 的文章，按 id 升序。"""
         rows = self.conn.execute(
