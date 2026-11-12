@@ -167,6 +167,15 @@ class Store:
             return None
         return Build(r[0], from_iso(r[1]), from_iso(r[2]), r[3], r[4], r[5])
 
+    def llm_calls_today(self, day) -> int:
+        r = self.conn.execute("select count from llm_calls where day = ?", (day.isoformat(),)).fetchone()
+        return r[0] if r else 0
+
+    def count_llm_call(self, day) -> None:
+        with self.conn:
+            self.conn.execute("insert into llm_calls(day, count) values(?, 1) "
+                              "on conflict(day) do update set count = count + 1", (day.isoformat(),))
+
     def prune(self, now) -> int:
         """删除抓取时间早于 30 天的文章及其 event_articles 关联；事件本身保留。返回删除的文章数。"""
         cutoff = to_iso(now - timedelta(days=ARTICLE_RETENTION_DAYS))

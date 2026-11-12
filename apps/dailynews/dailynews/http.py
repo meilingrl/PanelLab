@@ -20,7 +20,9 @@ _REDIRECT_CODES = (301, 302, 303, 307, 308)
 
 
 class FetchError(Exception):
-    pass
+    def __init__(self, message="", status=None):
+        super().__init__(message)
+        self.status = status  # HTTP 状态码；连接失败、超时等没有状态时为 None
 
 
 @dataclass(frozen=True)
@@ -117,7 +119,7 @@ def post_json(url, payload, headers, timeout):
     finally:
         resp.close()
     if not 200 <= status < 300:
-        raise FetchError("HTTP %d：%s" % (status, body[:200].decode("utf-8", "replace")))
+        raise FetchError("HTTP %d：%s" % (status, body[:200].decode("utf-8", "replace")), status=status)
     try:
         out = json.loads(body.decode("utf-8"))
     except ValueError:

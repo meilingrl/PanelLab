@@ -150,3 +150,44 @@ def no_politeness(monkeypatch):
     """把同域名间隔降为 0，免得测试真的等待。"""
     from dailynews import http
     monkeypatch.setattr(http, "MIN_DOMAIN_INTERVAL", 0.0)
+
+
+class FakeLLM:
+    """测试用大模型：传 dict 列表则按调用顺序返回；传 {任务名: 函数(system, user) -> dict} 则按 system 首行“任务：<名>”分派。
+
+    calls 记录 (任务名或 None, system, user)；函数可抛 LLMError 来模拟失败。
+    """
+
+    def __init__(self, responses=None):
+        self._queue = None
+        self._funcs = None
+        if isinstance(responses, dict):
+            self._funcs = responses
+        else:
+            self._queue = list(responses or [])
+        self.calls = []
+
+    @staticmethod
+    def task_of(system):
+        first = system.split("\n", 1)[0].strip()
+        for prefix in ("任务：", "任务:"):
+            if first.startswith(prefix):
+                return first[len(prefix):].strip()
+        return None
+
+    def chat_json(self, system, user, *, max_tokens=2000):
+        task = self.task_of(system)
+        self.calls.append((task, system, user))
+        if self._funcs is not None:
+            fn = self._funcs.get(task)
+            if fn is None:
+                raise AssertionError("FakeLLM 没有为任务 %r 准备函数" % (task,))
+            return fn(system, user)
+        if not self._queue:
+            raise AssertionError("FakeLLM 预设响应已用完")
+        return self._queue.pop(0)
+
+
+@pytest.fixture
+def fake_llm():
+    return FakeLLM([])
