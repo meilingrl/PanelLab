@@ -227,7 +227,10 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
     issue_date = issue_date_for(now.astimezone(tz))
     issue = issue_date.isoformat()
     last = store.last_successful_build()
-    since = last.started_at if last is not None else now - FIRST_RUN_WINDOW
+    # 采集范围至少覆盖最近 36 小时：来源恢复后，它停机期间发布的条目仍能补采（URL 唯一，不会重复入库）
+    since = now - FIRST_RUN_WINDOW
+    if last is not None and last.started_at < since:
+        since = last.started_at
     build_id = store.start_build(now, issue)
     tracked = _TrackedLLM(llm)
 
@@ -256,18 +259,24 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
         if tracked.budget_exhausted:
             reasons.append("超出大模型调用上限")
         status = "degraded" if reasons else "ok"
-        stage("保存", _persist, store, issue, events, len(hidden), status, now)
+        # 先以 failed 入库：页面生成成功前中断，期不会被当成已发布
+        stage("保存", _persist, store, issue, events, len(hidden), "failed", now)
         try:
             render.render_issue(issue_date, events, hidden, settings, settings.site_dir)
+            # render_index 只列已发布的期，所以先改状态再生成首页；失败时改回 failed
+            _set_issue_status(store, issue, status)
             render.render_index(store, settings.site_dir)
         except Exception as e:
             _set_issue_status(store, issue, "failed")
             raise _StageError("发布", e)
-        prev = stage("发布", _previous_published, store, issue)
-        if prev is not None:
-            stage("发布", render.render_issue, date.fromisoformat(prev),
-                  _stored_events(store, prev, settings), _stored_hidden(settings.site_dir, prev),
-                  settings, settings.site_dir)
+        warnings = []
+        try:
+            prev = _previous_published(store, issue)
+            if prev is not None:
+                render.render_issue(date.fromisoformat(prev), _stored_events(store, prev, settings),
+                                    _stored_hidden(settings.site_dir, prev), settings, settings.site_dir)
+        except Exception as e:  # 上一期只是补「下一期」链接，失败不影响本期
+            warnings.append("上一期页面更新失败：%s" % type(e).__name__)
         stage("清理", store.prune, now)
     except _StageError as e:
         msg = "构建失败（阶段：%s）：%s" % (e.stage, type(e.exc).__name__)
@@ -284,9 +293,11 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
     ]
     if tracked.budget_exhausted:
         lines.append("已超出今日大模型调用上限，部分条目未生成摘要")
-    note = "期号 %s，事件 %d" % (issue, len(events)) + ("；降级：" + "、".join(reasons) if reasons else "")
-    _finish(store, build_id, status, note)
-    return BuildResult(issue_date, 3 if reasons else 0, note, lines)
+    lines.extend(warnings)
+    problems = reasons + warnings
+    note = "期号 %s，事件 %d" % (issue, len(events)) + ("；降级：" + "、".join(problems) if problems else "")
+    _finish(store, build_id, "degraded" if problems else "ok", note)
+    return BuildResult(issue_date, 3 if problems else 0, note, lines)
 
 
 def _finish(store: Store, build_id: int, status: str, note: str) -> None:

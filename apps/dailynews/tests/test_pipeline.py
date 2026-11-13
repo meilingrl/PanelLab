@@ -320,7 +320,15 @@ def test_since_uses_last_successful_build(env, monkeypatch):
     store.finish_build(bid, ok_start + timedelta(minutes=2), "ok")
     bid = store.start_build(ok_start + timedelta(hours=1), "2026-11-14")
     store.finish_build(bid, ok_start + timedelta(hours=1, minutes=2), "failed")
-    pipeline.run_build(settings, store, fake_llm(), DAY2 + timedelta(hours=2))
+    # 上次成功 build 在 36 小时以内：仍取最近 36 小时
+    now = DAY2 + timedelta(hours=2)
+    pipeline.run_build(settings, store, fake_llm(), now)
+    assert seen[-1] == now - timedelta(hours=36)
+    # 上次成功 build 早于 36 小时（之后的 build 都失败）：从它开始
+    now = ok_start + timedelta(days=3)
+    for row in store.conn.execute("select id from builds where started_at > ?", ("2026-11-13T15:20:00Z",)):
+        store.finish_build(row[0], now, "failed")
+    pipeline.run_build(settings, store, fake_llm(), now)
     assert seen[-1] == ok_start
 
 
@@ -350,6 +358,69 @@ def test_render_failure_marks_issue_failed(env, monkeypatch):
     assert res.lines == ["构建失败（阶段：发布）：OSError"]
     assert issue_row(store, "2026-11-13")[2] == "failed"
     assert store.conn.execute("select status from builds").fetchone()[0] == "failed"
+
+
+def test_recovered_source_items_published_before_last_build_are_collected(env):
+    settings, store, server = env
+    server.route("/gd.xml", status=500)
+    assert pipeline.run_build(settings, store, fake_llm(), DAY1).exit_code == 0   # 2 个来源坏 1 个，不超过一半
+    # 次日 gd 恢复，带着一条在第一天 build 之前发布的条目
+    serve(server, BBC_DAY1, GD_DAY1)
+    res = pipeline.run_build(settings, store, fake_llm(), DAY2)
+    assert res.exit_code == 0
+    titles = [r[1] for r in events_of(store, "2026-11-14")]
+    assert "译：Chip maker unveils faster processor" in titles
+
+
+def test_issue_row_failed_until_pages_published(env, monkeypatch):
+    settings, store, _ = env
+    real = pipeline.render.render_issue
+    seen = []
+
+    def check(*a, **k):
+        seen.append(issue_row(store, "2026-11-13")[2])
+        return real(*a, **k)
+
+    monkeypatch.setattr(pipeline.render, "render_issue", check)
+    res = pipeline.run_build(settings, store, fake_llm(), DAY1)
+    assert res.exit_code == 0
+    assert seen == ["failed"]
+    assert issue_row(store, "2026-11-13")[2] == "ok"
+    with open(os.path.join(settings.site_dir, "index.html"), encoding="utf-8") as f:
+        assert "2026-11-13/" in f.read()
+
+
+def test_render_issue_failure_leaves_issue_failed(env, monkeypatch):
+    settings, store, _ = env
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(pipeline.render, "render_issue", boom)
+    res = pipeline.run_build(settings, store, fake_llm(), DAY1)
+    assert res.exit_code == 1 and res.lines == ["构建失败（阶段：发布）：RuntimeError"]
+    assert issue_row(store, "2026-11-13")[2] == "failed"
+
+
+def test_previous_issue_rerender_failure_is_warning_exit_3(env, monkeypatch):
+    settings, store, server = env
+    assert pipeline.run_build(settings, store, fake_llm(), DAY1).exit_code == 0
+    serve(server, BBC_DAY2, GD_DAY2)
+    real = pipeline.render.render_issue
+
+    def flaky(issue_date, *a, **k):
+        if issue_date == date(2026, 11, 13):
+            raise OSError("x")
+        return real(issue_date, *a, **k)
+
+    monkeypatch.setattr(pipeline.render, "render_issue", flaky)
+    res = pipeline.run_build(settings, store, fake_llm(), DAY2)
+    assert res.exit_code == 3
+    assert "上一期页面更新失败：OSError" in res.lines
+    assert "期号 2026-11-14" in res.lines
+    assert issue_row(store, "2026-11-14")[2] == "ok"
+    status = store.conn.execute("select status from builds order by id desc limit 1").fetchone()[0]
+    assert status == "degraded"
 
 
 # ---------- 命令行 ----------
