@@ -285,3 +285,33 @@ def test_link_prompt_states_judgement_rules(tmp_path):
     system = llm.calls[0][1]
     assert system.split("\n", 1)[0] == "任务：link"
     assert "stale" in system and "followup" in system
+
+
+def _offered(store, prev_title, today_title):
+    """往期事件 prev_title 是否作为候选出现在今天 today_title 那组的 link 调用里。"""
+    _add_event(store, "2026-11-12", prev_title)
+    ids = _add_articles(store, [today_title])
+    llm = FakeLLM({"link": lambda s, u: {"results": [{"group": 1, "decision": "new", "event_id": None}]}})
+    link_previous([ids], store, ISSUE, 7, llm)
+    return bool(llm.calls) and prev_title in llm.calls[0][2]
+
+
+def test_reworded_repeats_are_offered_to_llm(tmp_path):
+    pairs = [
+        ("Ceasefire talks begin in Cairo", "Israel, Hamas negotiators resume truce talks in Egypt"),
+        ("Tech giant announces layoffs of 10,000 staff", "Amazon to cut 10,000 jobs"),
+        ("Typhoon Haiyan makes landfall in Philippines", "Death toll from Typhoon Haiyan rises to 1,200"),
+    ]
+    for n, (prev, today) in enumerate(pairs):
+        assert _offered(Store(str(tmp_path / ("d%d.sqlite" % n))), prev, today), (prev, today)
+
+
+def test_unrelated_previous_event_not_offered(tmp_path):
+    assert not _offered(_store(tmp_path), "Ceasefire talks begin in Cairo", "Apple releases new iPhone")
+
+
+def test_overlap_alone_never_falls_back_to_stale(tmp_path):
+    store = _store(tmp_path)
+    _add_event(store, "2026-11-12", "Amazon to cut 10,000 jobs")
+    ids = _add_articles(store, ["Tech giant announces layoffs of 10,000 staff"])
+    assert link_previous([ids], store, ISSUE, 7, FakeLLM({"link": _fail})) == [Linked(tuple(ids), "new", None)]

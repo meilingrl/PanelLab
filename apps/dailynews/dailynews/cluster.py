@@ -8,7 +8,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import date, timedelta
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from .llm import BudgetExceeded, LLMError
@@ -17,7 +17,7 @@ from .store import Article, EventRow, Store
 GROUP_SIMILARITY = 0.6        # 同日初分组的标题相似度阈值
 CLUSTER_BATCH = 40            # 每次 cluster 调用最多的标题数
 SUMMARY_CHARS = 200           # 提示里每条简介最多的字符数
-CANDIDATE_SIMILARITY = 0.35   # 往期候选事件的标题相似度下限
+CANDIDATE_SCORE = 0.2         # 往期候选事件的得分下限：max(标题相似度, 实词重合度)；只决定给大模型看什么，偏向召回
 MAX_CANDIDATES = 5            # 每组最多给大模型的往期候选数
 STALE_FALLBACK = 0.8          # 大模型不可用时，相似度达到此值记为旧闻
 LINK_GROUPS_PER_CALL = 8      # 每次 link 调用判定的组数
@@ -224,28 +224,52 @@ _LINK_SYSTEM = """任务：link
 只输出 JSON，格式：{"results": [{"group": 组号, "decision": "stale" | "followup" | "new", "event_id": 事件编号或 null}, ...]}"""
 
 
-def _event_titles(e: EventRow) -> List[Tuple[str, ...]]:
-    return [tt for tt in (title_tokens(t) for t in (e.title_orig, e.title_zh) if t) if tt]
+# 计算实词重合度时去掉的英文虚词；中日韩文字仍按单字计
+_STOPWORDS = frozenset("the a an of in on to for and at by with from as is are was be after over its new says say"
+                       .split())
+
+_TitleKey = Tuple[Tuple[str, ...], FrozenSet[str]]
+_Candidate = Tuple[float, float, EventRow]  # (候选得分, 标题相似度, 事件)
 
 
-def _candidates(titles: List[Tuple[str, ...]], events: List[EventRow],
-                event_titles: Dict[int, List[Tuple[str, ...]]]) -> List[Tuple[float, EventRow]]:
+def _title_key(tokens: Tuple[str, ...]) -> _TitleKey:
+    return tokens, frozenset(t for t in tokens if t not in _STOPWORDS)
+
+
+def _overlap(a: FrozenSet[str], b: FrozenSet[str]) -> float:
+    """共有实词数 / 较短标题的实词数。"""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
+
+
+def _event_titles(e: EventRow) -> List[_TitleKey]:
+    return [_title_key(tt) for tt in (title_tokens(t) for t in (e.title_orig, e.title_zh) if t) if tt]
+
+
+def _candidates(titles: List[_TitleKey], events: List[EventRow],
+                event_titles: Dict[int, List[_TitleKey]]) -> List[_Candidate]:
     scored = []
     for order, e in enumerate(events):
-        best = 0.0
-        for t in titles:
-            for et in event_titles[e.id]:
-                best = max(best, _ratio(t, et, CANDIDATE_SIMILARITY))
-        if best >= CANDIDATE_SIMILARITY:
-            scored.append((best, order, e))
-    # 相似度高者在前；同分时较新的事件在前（events 已按新到旧排序）
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    return [(s, e) for s, _, e in scored[:MAX_CANDIDATES]]
+        best_score = best_sim = 0.0
+        for tokens, content in titles:
+            for etokens, econtent in event_titles[e.id]:
+                sim = _ratio(tokens, etokens, CANDIDATE_SCORE)
+                best_sim = max(best_sim, sim)
+                best_score = max(best_score, sim, _overlap(content, econtent))
+        if best_score >= CANDIDATE_SCORE:
+            scored.append((best_score, best_sim, order, e))
+    # 得分高者在前；同分时较新的事件在前（events 已按新到旧排序）
+    scored.sort(key=lambda x: (-x[0], x[2]))
+    return [(score, sim, e) for score, sim, _, e in scored[:MAX_CANDIDATES]]
 
 
-def _fallback(ids: Tuple[int, ...], cands: List[Tuple[float, EventRow]]) -> Linked:
-    if cands and cands[0][0] >= STALE_FALLBACK:
-        return Linked(ids, "stale", cands[0][1].id)
+def _fallback(ids: Tuple[int, ...], cands: List[_Candidate]) -> Linked:
+    """大模型不可用：只按标题相似度判断，最相似的候选达到 STALE_FALLBACK 记为旧闻。"""
+    if cands:
+        sim, e = max(((c[1], c[2]) for c in cands), key=lambda x: x[0])
+        if sim >= STALE_FALLBACK:
+            return Linked(ids, "stale", e.id)
     return Linked(ids, "new", None)
 
 
@@ -264,7 +288,7 @@ def _link_prompt(chunk, by_id: Dict[int, Article]) -> str:
                 line += "\n  简介：" + _clip(a.summary)
             lines.append(line)
         lines.append("候选往期事件：")
-        for _, e in cands:
+        for _, _, e in cands:
             title = " / ".join(t for t in (e.title_zh, e.title_orig) if t)
             line = "- 事件编号 %d（期号 %s）：%s" % (e.id, e.issue_date.isoformat(), " ".join(title.split()))
             if _clip(e.summary_zh):
@@ -290,7 +314,7 @@ def _parse_link(out, chunk) -> Dict[int, Linked]:
         if decision == "new":
             decided[g - 1] = Linked(ids, "new", None)
         elif decision in ("stale", "followup"):
-            if _valid_int(event_id) and event_id in {e.id for _, e in cands}:
+            if _valid_int(event_id) and event_id in {e.id for _, _, e in cands}:
                 decided[g - 1] = Linked(ids, decision, event_id)
     return decided
 
@@ -308,7 +332,7 @@ def link_previous(groups: List[List[int]], store: Store, issue_date: date, lookb
     for idx, g in enumerate(groups):
         ids = tuple(g)
         titles = [title_tokens(by_id[i].title) for i in ids if i in by_id]
-        cands = _candidates([t for t in titles if t], events, event_titles)
+        cands = _candidates([_title_key(t) for t in titles if t], events, event_titles)
         if not cands:
             results[idx] = Linked(ids, "new", None)
         else:
