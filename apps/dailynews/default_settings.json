@@ -87,13 +87,13 @@
       "enabled": true
     },
     {
-      "id": "nhk-world",
-      "name": "NHK World",
-      "url": "https://www3.nhk.or.jp/nhkworld/en/news/feeds/",
+      "id": "cna",
+      "name": "CNA World",
+      "url": "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6311",
       "kind": "rss",
       "category": "world",
       "type": "media",
-      "enabled": false
+      "enabled": true
     },
     {
       "id": "un-news",
@@ -147,7 +147,7 @@
       "kind": "rss",
       "category": "finance",
       "type": "official",
-      "enabled": false
+      "enabled": true
     },
     {
       "id": "ecb",
@@ -156,16 +156,16 @@
       "kind": "rss",
       "category": "finance",
       "type": "official",
-      "enabled": false
+      "enabled": true
     },
     {
-      "id": "imf",
-      "name": "IMF News",
-      "url": "https://www.imf.org/en/News/rss",
+      "id": "boe",
+      "name": "英格兰银行 Bank of England",
+      "url": "https://www.bankofengland.co.uk/rss/news",
       "kind": "rss",
       "category": "finance",
       "type": "official",
-      "enabled": false
+      "enabled": true
     },
     {
       "id": "ars",
@@ -237,7 +237,7 @@
       "kind": "rss",
       "category": "ai",
       "type": "company",
-      "enabled": false
+      "enabled": true
     },
     {
       "id": "meta-ai",
@@ -246,7 +246,7 @@
       "kind": "html",
       "category": "ai",
       "type": "company",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "msr",
