@@ -138,11 +138,11 @@ def build_parser():
     sub.add_parser("check-sources", help="检查各来源是否可访问").set_defaults(func=_check_sources)
     b = sub.add_parser("build", help="采集并生成当期简报")
     b.add_argument("--now", type=_iso_time, default=None,
-                   help="把这个时间当作现在（ISO 时间，带时区；仅用于测试和补跑）")
+                   help="把这个时间当作现在（ISO 时间，带时区；仅用于测试）")
     b.set_defaults(func=_build)
     n = sub.add_parser("notify", help="发送当期提醒邮件")
     n.add_argument("--now", type=_iso_time, default=None,
-                   help="把这个时间当作现在（ISO 时间，带时区；仅用于测试和补跑）")
+                   help="把这个时间当作现在（ISO 时间，带时区；仅用于测试）")
     n.set_defaults(func=_notify)
     return p
 
