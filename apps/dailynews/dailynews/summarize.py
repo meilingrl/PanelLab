@@ -97,7 +97,7 @@ def _prompt_event(n: int, c: Candidate, arts: List[Article], names: Dict[str, st
     head = "[%d]%s" % (n, " 后续（followup）" if c.linked.status == "followup" else "")
     lines = [head]
     if prev_report is not None:
-        lines.append("此前报道：%s；%s" % prev_report)
+        lines.append("此前报道：" + "；".join(t for t in prev_report if t))
     if title_only:
         lines.append(TITLE_ONLY_NOTE)
     for a in arts[:MAX_ARTICLES]:
@@ -181,7 +181,8 @@ def summarize(selection: Selection, store, llm, settings: Settings) -> List[Even
             title_only = infos[k][3]          # 没有原文：摘要只是标题译文，不要详情
             result[k] = EventOut(
                 title_zh=v[1], title_orig=old.title_orig, category=old.category, status=old.status,
-                summary_zh=v[1] if title_only else v[2], detail_zh="" if title_only else v[3], change_zh=v[4] if followup else None,
+                summary_zh=v[1] if title_only else v[2], detail_zh="" if title_only else v[3],
+                change_zh=v[4] if followup else None,
                 sources=old.sources, prev_issue=old.prev_issue, degraded=False, basis=old.basis,
                 section=old.section, score=old.score, article_ids=old.article_ids,
                 prev_event_id=old.prev_event_id)
