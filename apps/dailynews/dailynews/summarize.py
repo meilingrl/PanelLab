@@ -27,7 +27,8 @@ SYSTEM_PROMPT = """任务：summarize
 3. title_zh：中文标题，简洁准确。
 4. summary_zh：2 到 3 句话概括事件。
 5. detail_zh：不超过 6 句，综合多个来源的内容。
-6. 标为“后续”（followup）的事件另给 change_zh：一句话，只说明今天的原文中相对此前报道的新变化；其他事件 change_zh 为 null。
+6. 标为“后续”（followup）的事件另给 change_zh：一句话，只说明今天的原文中相对“此前报道”的新变化；其他事件 change_zh 为 null。
+7. 标为“仅有标题”的事件没有原文可依据：summary_zh 只写标题的中文译文，detail_zh 为空字符串，不扩写。
 只输出 JSON：{"items": [{"i": 编号, "title_zh": "...", "summary_zh": "...", "detail_zh": "...", "change_zh": "..." 或 null}, ...]}，
 每个事件一项，i 为该事件的编号。"""
 
@@ -57,6 +58,10 @@ class EventOut:
     prev_event_id: Optional[int]
 
 
+_HAN = re.compile("[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+TITLE_ONLY_NOTE = "（此事件仅有标题：summary_zh 只写标题的中文译文，detail_zh 为空字符串）"
+NO_TEXT = "（无，仅有标题）"
+
 _SENTENCE = re.compile(r"^.*?(?:[。！？!?]|\.(?=\s|$))", re.S)
 
 
@@ -83,11 +88,20 @@ def _sources(arts: List[Article], names: Dict[str, str]) -> List[SourceLink]:
     return out
 
 
-def _prompt_event(n: int, c: Candidate, arts: List[Article], names: Dict[str, str]) -> str:
+def _has_text(a: Article) -> bool:
+    return bool(_grounding(a)[0].strip())
+
+
+def _prompt_event(n: int, c: Candidate, arts: List[Article], names: Dict[str, str],
+                  prev_report: Optional[Tuple[str, str]], title_only: bool) -> str:
     head = "[%d]%s" % (n, " 后续（followup）" if c.linked.status == "followup" else "")
     lines = [head]
+    if prev_report is not None:
+        lines.append("此前报道：%s；%s" % prev_report)
+    if title_only:
+        lines.append(TITLE_ONLY_NOTE)
     for a in arts[:MAX_ARTICLES]:
-        text, _ = _grounding(a)
+        text = _grounding(a)[0] if _has_text(a) else NO_TEXT
         lines.append("- 来源：%s\n  原标题：%s\n  原文：%s" % (names.get(a.source_id, a.source_id), a.title, text))
     return "\n".join(lines)
 
@@ -110,6 +124,8 @@ def _valid_item(item, size: int):
     detail = item.get("detail_zh")
     if title is None or summary is None or not isinstance(detail, str):
         return None
+    if not _HAN.search(title) or not _HAN.search(summary):     # 不是中文输出：该事件降级
+        return None
     return i, title, summary, detail.strip()[:DETAIL_MAX], _text(item, "change_zh", CHANGE_MAX)
 
 
@@ -120,7 +136,7 @@ def summarize(selection: Selection, store, llm, settings: Settings) -> List[Even
         placed.extend((c, "category") for c in selection.by_category.get(cat.id, []))
 
     result = []     # type: List[EventOut]
-    infos = []      # 与 result 对应的 (Candidate, 文章列表)
+    infos = []      # 与 result 对应的 (Candidate, 文章列表, 此前报道, 是否仅有标题)
     for c, section in placed:
         arts = store.get_articles(list(c.linked.article_ids))
         first = arts[0] if arts else None
@@ -134,12 +150,14 @@ def summarize(selection: Selection, store, llm, settings: Settings) -> List[Even
             prev_issue=store.event_issue_date(prev) if prev is not None else None,
             degraded=True, basis=basis, section=section, score=c.score,
             article_ids=tuple(c.linked.article_ids), prev_event_id=prev))
-        infos.append((c, arts))
+        title_only = not any(_has_text(a) for a in arts[:MAX_ARTICLES])
+        infos.append((c, arts, store.event_report(prev) if prev is not None else None, title_only))
 
     for start in range(0, len(placed), BATCH):
         batch = list(range(start, min(start + BATCH, len(placed))))
         user = "事件：\n" + "\n\n".join(
-            _prompt_event(n, infos[k][0], infos[k][1], names) for n, k in enumerate(batch, 1))
+            _prompt_event(n, infos[k][0], infos[k][1], names, infos[k][2], infos[k][3])
+            for n, k in enumerate(batch, 1))
         try:
             data = llm.chat_json(SYSTEM_PROMPT, user, max_tokens=4000)
         except BudgetExceeded:
@@ -160,9 +178,10 @@ def summarize(selection: Selection, store, llm, settings: Settings) -> List[Even
                 continue
             seen.add(v[0])
             old = result[k]
+            title_only = infos[k][3]          # 没有原文：摘要只是标题译文，不要详情
             result[k] = EventOut(
                 title_zh=v[1], title_orig=old.title_orig, category=old.category, status=old.status,
-                summary_zh=v[2], detail_zh=v[3], change_zh=v[4] if followup else None,
+                summary_zh=v[1] if title_only else v[2], detail_zh="" if title_only else v[3], change_zh=v[4] if followup else None,
                 sources=old.sources, prev_issue=old.prev_issue, degraded=False, basis=old.basis,
                 section=old.section, score=old.score, article_ids=old.article_ids,
                 prev_event_id=old.prev_event_id)

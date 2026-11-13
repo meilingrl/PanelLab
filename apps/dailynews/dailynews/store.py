@@ -2,7 +2,7 @@
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 ARTICLE_RETENTION_DAYS = 30
 
@@ -176,6 +176,11 @@ class Store:
         """事件所在期号（YYYY-MM-DD）；事件不存在时为 None。"""
         r = self.conn.execute("select issue_date from events where id = ?", (event_id,)).fetchone()
         return r[0] if r else None
+
+    def event_report(self, event_id) -> Optional[Tuple[str, str]]:
+        """事件的 (中文标题, 中文摘要)，供后续事件的摘要提示参考；事件不存在时为 None。"""
+        r = self.conn.execute("select title_zh, summary_zh from events where id = ?", (event_id,)).fetchone()
+        return (r[0] or "", r[1] or "") if r else None
 
     def start_build(self, started_at, issue_date=None) -> int:
         with self.conn:

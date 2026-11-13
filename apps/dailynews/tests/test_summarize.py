@@ -212,3 +212,59 @@ def test_empty_selection_makes_no_calls(store, settings):
     llm = FakeLLM({"summarize": _echo()})
     assert summarize(_sel([]), store, llm, settings) == []
     assert llm.calls == []
+
+
+def test_title_only_event_marked_and_kept_to_translated_title(store, settings):
+    bare = _add(store, 1, "Minister resigns")                       # 没有简介也没有正文
+    rich = _add(store, 2, "Port strike ends", summary="Workers returned on Monday.")
+    llm = FakeLLM({"summarize": lambda s, u: {"items": [
+        {"i": 1, "title_zh": "部长辞职", "summary_zh": "部长因丑闻辞职，总理接受。", "detail_zh": "编造的细节。",
+         "change_zh": None},
+        {"i": 2, "title_zh": "港口罢工结束", "summary_zh": "工人周一复工。", "detail_zh": "工人复工。",
+         "change_zh": None}]}})
+    out = summarize(_sel([_cand([bare]), _cand([rich])]), store, llm, settings)
+    system, user = llm.calls[0][1], llm.calls[0][2]
+    assert "仅有标题" in system and "detail_zh 为空" in system
+    block1, block2 = user.split("[2]")
+    assert "原文：（无，仅有标题）" in block1 and "仅有标题" in block1
+    assert "原文：（无，仅有标题）" not in block2 and "Workers returned on Monday." in block2
+    e = out[0]
+    assert (e.title_zh, e.summary_zh, e.detail_zh, e.basis, e.degraded) == ("部长辞职", "部长辞职", "", "snippet", False)
+    assert (out[1].summary_zh, out[1].detail_zh) == ("工人周一复工。", "工人复工。")
+
+
+def test_event_with_one_textless_article_marks_only_that_article(store, settings):
+    a = _add(store, 1, "Minister resigns")
+    b = _add(store, 2, "Minister quits", source="gd", summary="The minister quit on Monday.")
+    llm = FakeLLM({"summarize": _echo()})
+    out = summarize(_sel([_cand([a, b])]), store, llm, settings)
+    user = llm.calls[0][2]
+    assert user.count("原文：（无，仅有标题）") == 1
+    assert "此事件仅有标题" not in user
+    assert out[0].detail_zh == "详情一。详情二。"
+
+
+def test_non_chinese_output_degrades_event(store, settings):
+    ids = [_add(store, n, "Story %d" % n, summary="Sum %d. More." % n) for n in range(1, 4)]
+    llm = FakeLLM({"summarize": lambda s, u: {"items": [
+        {"i": 1, "title_zh": "Story one", "summary_zh": "第一句。", "detail_zh": "", "change_zh": None},
+        {"i": 2, "title_zh": "第二条", "summary_zh": "Sum two.", "detail_zh": "", "change_zh": None},
+        _item(3)]}})
+    out = summarize(_sel([_cand([i]) for i in ids]), store, llm, settings)
+    assert [e.degraded for e in out] == [True, True, False]
+    assert out[0].title_zh == "Story 1"
+
+
+def test_followup_prompt_includes_previous_report(store, settings):
+    store.conn.execute("insert into events(id, issue_date, title_zh, summary_zh) values "
+                       "(7, '2026-11-11', '停火谈判开始', '双方在开罗开始谈判。')")
+    store.conn.commit()
+    a = _add(store, 1, "Truce extended", summary="The truce was extended by a week.")
+    b = _add(store, 2, "New story", summary="Something else.")
+    llm = FakeLLM({"summarize": _echo(change="停火延长一周。")})
+    summarize(_sel([_cand([a], status="followup", prev=7), _cand([b])]), store, llm, settings)
+    block1, block2 = llm.calls[0][2].split("[2]")
+    assert "此前报道：停火谈判开始；双方在开罗开始谈判。" in block1
+    assert "此前报道" not in block2
+    assert store.event_report(7) == ("停火谈判开始", "双方在开罗开始谈判。")
+    assert store.event_report(99) is None
