@@ -8,7 +8,7 @@ import pytest
 from conftest import FakeLLM, fixture_bytes, raw_settings
 from dailynews import cli, pipeline
 from dailynews.feeds import CollectReport
-from dailynews.llm import BudgetExceeded
+from dailynews.llm import BudgetExceeded, LLMError
 from dailynews.settings import load_settings
 from dailynews.store import Store
 
@@ -127,8 +127,15 @@ def _summarize(system, user):
     return {"items": items}
 
 
-def fake_llm():
-    return FakeLLM({"cluster": _cluster, "link": _link, "classify": _classify, "summarize": _summarize})
+def _no_merge(system, user):
+    return {"merge": []}
+
+
+def fake_llm(**over):
+    funcs = {"cluster": _cluster, "link": _link, "classify": _classify, "summarize": _summarize,
+             "merge": _no_merge}
+    funcs.update(over)
+    return FakeLLM(funcs)
 
 
 @pytest.fixture
@@ -294,13 +301,101 @@ def test_budget_exceeded_exit_3(env):
     def broke(system, user):
         raise BudgetExceeded("今日大模型调用已达上限（1 次）")
 
-    llm = FakeLLM({k: broke for k in ("cluster", "link", "classify", "summarize")})
+    llm = FakeLLM({k: broke for k in ("cluster", "link", "classify", "summarize", "merge")})
     res = pipeline.run_build(settings, store, llm, DAY1)
     assert res.exit_code == 3
     rows = events_of(store, "2026-11-13")
     assert rows and all(r[6] == 1 for r in rows)
     assert issue_row(store, "2026-11-13")[2] == "degraded"
     assert "未生成摘要" in page(settings, "2026-11-13")
+
+
+def _raise(msg):
+    def fn(system, user):
+        raise LLMError(msg)
+    return fn
+
+
+def test_dead_model_exit_3(env):
+    settings, store, _ = env
+    dead = _raise("大模型请求失败：HTTP 401")
+    llm = FakeLLM({k: dead for k in ("cluster", "link", "classify", "summarize", "merge")})
+    res = pipeline.run_build(settings, store, llm, DAY1)
+    assert res.exit_code == 3
+    n = len(llm.calls)
+    assert "大模型调用失败 %d 次" % n in res.lines
+    assert "大模型调用失败 %d 次" % n in res.note
+    rows = events_of(store, "2026-11-13")
+    assert rows and all(r[6] == 1 for r in rows)            # 退回原文的条目仍然显示
+    assert issue_row(store, "2026-11-13")[2] == "degraded"
+    assert store.conn.execute("select status from builds").fetchone()[0] == "degraded"
+
+
+def test_any_summarize_failure_exit_3(env):
+    settings, store, _ = env
+    llm = fake_llm(summarize=_raise("大模型请求失败：HTTP 502"))
+    res = pipeline.run_build(settings, store, llm, DAY1)
+    assert res.exit_code == 3
+    assert "大模型调用失败 1 次" in res.lines
+    assert issue_row(store, "2026-11-13")[2] == "degraded"
+
+
+def test_minor_llm_failure_below_half_is_ok(env):
+    settings, store, _ = env
+    llm = fake_llm(cluster=_raise("大模型请求失败：HTTP 500"))
+    res = pipeline.run_build(settings, store, llm, DAY1)
+    assert len(llm.calls) >= 4                              # cluster 失败 1 次，其余成功，不到一半
+    assert res.exit_code == 0
+    assert not any("大模型调用失败" in line for line in res.lines)
+    assert issue_row(store, "2026-11-13")[2] == "ok"
+
+
+def test_merge_joins_story_split_across_cluster_batches(env):
+    settings, store, _ = env
+
+    def singletons(system, user):
+        return {"groups": [[n] for n, _ in _numbered_titles(user)]}
+
+    def merge_floods(system, user):
+        nums = [n for n, t in _numbered_titles(user) if "flood" in t.lower()]
+        return {"merge": [nums]}
+
+    res = pipeline.run_build(settings, store, fake_llm(cluster=singletons, merge=merge_floods), DAY1)
+    assert res.exit_code == 0
+    rows = events_of(store, "2026-11-13")
+    floods = [r for r in rows if "flood" in r[1].lower()]
+    assert len(floods) == 1
+    n = store.conn.execute("select count(*) from event_articles where event_id = ?", (floods[0][0],)).fetchone()
+    assert n[0] == 2
+
+
+def _fetched(server):
+    return [r.path for r in server.requests if r.method == "GET" and r.path.startswith("/a/")]
+
+
+def test_bodies_fetched_after_ranking_in_page_order(env):
+    settings, store, server = env
+    res = pipeline.run_build(settings, store, fake_llm(), DAY1)
+    assert res.exit_code == 0
+    fetched = _fetched(server)
+    assert "/a/prov" not in fetched                          # 被过滤的国内条目不抓原文
+    assert set(fetched) == {"/a/flood-bbc", "/a/flood-gd", "/a/elect-bbc", "/a/chip"}
+    assert fetched[:2] == ["/a/flood-bbc", "/a/flood-gd"]      # 要闻第一条（两个来源）在前，agency 来源优先
+
+
+def test_fetch_cap_goes_to_top_event(tmp_path, http_server, no_politeness):
+    serve(http_server, BBC_DAY1, GD_DAY1)
+    settings = load_settings(write_settings(tmp_path, two_sources(http_server), fetch_articles_max=1))
+    os.makedirs(settings.data_dir)
+    store = Store(os.path.join(settings.data_dir, "dailynews.db"))
+    try:
+        assert pipeline.run_build(settings, store, fake_llm(), DAY1).exit_code == 0
+        assert _fetched(http_server) == ["/a/flood-bbc"]
+        # 同一期重试：已有正文的不再抓，名额给下一篇
+        assert pipeline.run_build(settings, store, fake_llm(), DAY1 + timedelta(minutes=30)).exit_code == 0
+        assert _fetched(http_server) == ["/a/flood-bbc", "/a/flood-gd"]
+    finally:
+        store.close()
 
 
 def test_since_uses_last_successful_build(env, monkeypatch):
@@ -456,7 +551,8 @@ def test_output_never_contains_api_key(tmp_path, http_server, no_politeness, mon
 
     code = cli.main(["--settings", path, "build", "--now", DAY1.isoformat()])
     out = capsys.readouterr()
-    assert code == 0
+    assert code == 3                                     # 大模型全部失败：网页照发，退出码 3 告警
+    assert "大模型调用失败" in out.out
     auth = [r for r in http_server.requests if r.method == "POST"]
     assert auth and auth[0].headers.get("Authorization") == "Bearer " + SECRET   # 密钥确实用过
     assert "期号 2026-11-13" in out.out

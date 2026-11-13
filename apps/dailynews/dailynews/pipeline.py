@@ -1,16 +1,17 @@
-"""build 编排与期号：采集 → 同日归并 → 跨天比对 → 抓原文 → 分类排序 → 摘要 → 入库 → 发布 → 清理。
+"""build 编排与期号：采集 → 同日归并 → 跨天比对 → 分类排序 → 选出后合并 → 抓原文 → 摘要 → 入库 → 发布 → 清理。
 
-退出码：0 正常；3 部分降级（一半以上来源失败、全部来源失败或超出大模型调用上限，网页照常发布）；
+退出码：0 正常；3 部分降级（一半以上来源失败、全部来源失败、超出大模型调用上限或大模型调用失败过多，
+网页照常发布）；
 1 其他失败。作业输出只有几行中文摘要；意外异常只报阶段名和异常类型，不带异常文字（可能含密钥或地址）。
 """
 import json
 import os
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from . import cluster, extract, feeds, rank, render, summarize
-from .llm import BudgetExceeded
+from .llm import BudgetExceeded, LLMError
 from .render import HiddenItem
 from .settings import Settings
 from .store import Article, Store, from_iso, to_iso
@@ -40,11 +41,16 @@ class BuildResult:
 
 
 class _TrackedLLM:
-    """记录本次 build 的调用次数，以及是否遇到 BudgetExceeded（各阶段会吞掉大模型错误）。"""
+    """记录本次 build 的调用次数、失败次数（含 summarize 的），以及是否遇到 BudgetExceeded。
+
+    各阶段会吞掉大模型错误并退回降级结果，所以失败只能在这里统计，由 run_build 决定是否告警。
+    """
 
     def __init__(self, inner):
         self.inner = inner
         self.calls = 0
+        self.failed = 0
+        self.summarize_failed = 0
         self.budget_exhausted = False
 
     def chat_json(self, system, user, **kwargs):
@@ -53,11 +59,21 @@ class _TrackedLLM:
         except BudgetExceeded:
             self.budget_exhausted = True
             raise
+        except LLMError:
+            self.calls += 1
+            self.failed += 1
+            if system.split("\n", 1)[0].strip() == "任务：summarize":
+                self.summarize_failed += 1
+            raise
         except Exception:
             self.calls += 1
             raise
         self.calls += 1
         return out
+
+    def too_many_failures(self) -> bool:
+        """有 summarize 调用失败，或一半及以上的调用失败。"""
+        return self.summarize_failed > 0 or (self.calls > 0 and self.failed * 2 >= self.calls)
 
 
 class _StageError(Exception):
@@ -93,23 +109,23 @@ def _build_articles(store: Store, issue: str, now: datetime) -> List[Article]:
             if a.id not in other and not (exclusive and a.fetched_at <= start)]
 
 
-def _fetch_order(linked: List[cluster.Linked], by_id: Dict[int, Article], settings: Settings) -> List[int]:
-    """未判为旧闻的组的文章：来源多的组在前；组内 agency/official 来源在前；已有正文的不再抓。"""
+def _fetch_order(selection: rank.Selection, store: Store, settings: Settings) -> List[int]:
+    """选出的事件按页面顺序（要闻在前，再按设置里的类别顺序）；每个事件只取摘要会用到的前几篇，
+    其中 agency/official 来源在前；已有正文的不再抓。fetch_bodies 再截到 fetch_articles_max 篇。"""
     types = {s.id: s.type for s in settings.sources}
 
     def prio(a):
         return 0 if types.get(a.source_id) in PRIORITY_TYPES else 1
 
-    groups = []
-    for k, g in enumerate(linked):
-        if g.status == "stale":
-            continue
-        arts = [by_id[i] for i in g.article_ids if i in by_id]
-        n_sources = len({a.source_id for a in arts})
-        best = min((prio(a) for a in arts), default=1)
-        groups.append(((-n_sources, best, k), sorted(arts, key=lambda a: (prio(a), a.id))))
-    groups.sort(key=lambda x: x[0])
-    return [a.id for _, arts in groups for a in arts if a.body_status != "ok"]
+    placed = list(selection.top)
+    for cat in settings.categories:
+        placed.extend(selection.by_category.get(cat.id, []))
+    out = []    # type: List[int]
+    for c in placed:
+        arts = store.get_articles(list(c.linked.article_ids[:summarize.MAX_ARTICLES]))
+        out.extend(a.id for a in sorted(arts, key=lambda a: (prio(a), a.id))
+                   if a.body_status != "ok" and a.id not in out)
+    return out
 
 
 def _hidden(selection: rank.Selection, store: Store) -> List[HiddenItem]:
@@ -246,10 +262,10 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
         groups = stage("归并", cluster.group_same_day, articles, tracked)
         linked = stage("跨天比对", cluster.link_previous, groups, store, issue_date,
                        settings.lookback_days, tracked)
-        by_id = {a.id: a for a in articles}
-        stage("抓取原文", lambda: extract.fetch_bodies(store, settings, _fetch_order(linked, by_id, settings)))
         candidates = stage("分类", rank.classify, linked, store, settings, tracked)
         selection = stage("分类", rank.select, candidates, settings)
+        selection = stage("合并", rank.merge_placed, selection, candidates, store, settings, tracked)
+        stage("抓取原文", lambda: extract.fetch_bodies(store, settings, _fetch_order(selection, store, settings)))
         events = stage("摘要", summarize.summarize, selection, store, tracked, settings)
         hidden = stage("摘要", _hidden, selection, store)
 
@@ -258,6 +274,8 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
             reasons.append("一半以上来源失败")
         if tracked.budget_exhausted:
             reasons.append("超出大模型调用上限")
+        if tracked.too_many_failures():
+            reasons.append("大模型调用失败 %d 次" % tracked.failed)
         status = "degraded" if reasons else "ok"
         # 先以 failed 入库：页面生成成功前中断，期不会被当成已发布
         stage("保存", _persist, store, issue, events, len(hidden), "failed", now)
@@ -293,6 +311,8 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
     ]
     if tracked.budget_exhausted:
         lines.append("已超出今日大模型调用上限，部分条目未生成摘要")
+    if tracked.too_many_failures():
+        lines.append("大模型调用失败 %d 次" % tracked.failed)
     lines.extend(warnings)
     problems = reasons + warnings
     note = "期号 %s，事件 %d" % (issue, len(events)) + ("；降级：" + "、".join(problems) if problems else "")
