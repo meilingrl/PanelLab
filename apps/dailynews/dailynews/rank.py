@@ -1,4 +1,5 @@
-"""分类、过滤与排序：给每个事件组定类别、是否中国国内事务、重要性，再按分数选出要闻和各类别条目。
+"""分类、过滤与排序：给每个事件组定类别、是否中国国内事务、重要性，再按分数选出要闻和各类别条目；
+选出后再用一次大模型调用合并被分在不同批里的同一事件（merge_placed）。
 
 大模型失败、超出调用上限或某条输出不合格时，该条（或该批）退回降级值，这里的函数不向外抛出大模型错误。
 """
@@ -160,3 +161,91 @@ def select(candidates: List[Candidate], settings: Settings) -> Selection:
         if len(rows) < settings.per_category:
             rows.append(c)
     return Selection(top, by_category, hidden, filtered)
+
+
+# ---------- merge ----------
+
+MERGE_SNIPPET_CHARS = 120      # merge 提示里每条简介最多的字符数
+
+MERGE_SYSTEM = """任务：merge
+你会看到今天简报里已选出的事件，每条以 [编号] 开头，附标题，部分附简介开头。
+请找出报道同一个具体事件的条目（同一次发布、同一项决定、同一场会议、同一起事故等）；只是话题相近不算。
+规则：
+- 只根据给出的文字判断，不要凭外部知识推测。
+- 每组至少两个编号，每个编号最多出现一次；不与其他条目重复的条目不要列出；没有重复时输出空列表。
+只输出 JSON：{"merge": [[编号, 编号, ...], ...]}"""
+
+
+def _placed(selection: Selection, settings: Settings) -> List[Candidate]:
+    out = list(selection.top)
+    for cat in settings.categories:
+        out.extend(selection.by_category.get(cat.id, []))
+    return out
+
+
+def _parse_merge(out, n: int) -> Optional[List[List[int]]]:
+    """校验 {"merge": [[1-based 编号...]...]}：编号在范围内、全局最多出现一次、每组至少两个。不合格返回 None。"""
+    groups = out.get("merge") if isinstance(out, dict) else None
+    if not isinstance(groups, list):
+        return None
+    seen = set()
+    result = []
+    for g in groups:
+        if not isinstance(g, list) or len(g) < 2:
+            return None
+        for x in g:
+            if isinstance(x, bool) or not isinstance(x, int) or not 1 <= x <= n or x in seen:
+                return None
+            seen.add(x)
+        result.append([x - 1 for x in g])
+    return result
+
+
+def merge_placed(selection: Selection, candidates: List[Candidate], store, settings: Settings,
+                 llm) -> Selection:
+    """把已选出的事件里报道同一件事的合并成一个，再重新选（空出的位置由其余候选补上）。
+
+    合并后的事件沿用得分最高成员的类别、状态与往期事件，文章合并去重，来源数重新计算。
+    大模型失败或输出不合格时原样返回。
+    """
+    placed = _placed(selection, settings)
+    if len(placed) < 2:
+        return selection
+    lines = []
+    for n, c in enumerate(placed, 1):
+        arts = store.get_articles(list(c.linked.article_ids[:1]))
+        title = " ".join(arts[0].title.split()) if arts else ""
+        line = "[%d] %s" % (n, title)
+        snippet = " ".join((arts[0].summary or "").split())[:MERGE_SNIPPET_CHARS] if arts else ""
+        if snippet:
+            line += "\n    简介：" + snippet
+        lines.append(line)
+    try:
+        groups = _parse_merge(llm.chat_json(MERGE_SYSTEM, "\n".join(lines)), len(placed))
+    except LLMError:
+        return selection
+    if not groups:
+        return selection
+
+    by_key = {c.linked.article_ids: c for c in candidates}     # 未打分的原候选
+    replace_at = {}     # 原候选的 article_ids -> 合并后的候选（None 表示被并入别处）
+    for g in groups:
+        members = [placed[k] for k in g]
+        best = max(members, key=lambda c: c.score)              # 同分取页面上靠前的
+        ids = []
+        for c in [best] + [m for m in members if m is not best]:
+            ids.extend(i for i in c.linked.article_ids if i not in ids)
+        arts = store.get_articles(ids)
+        merged = replace(by_key.get(best.linked.article_ids, best),
+                         linked=Linked(tuple(ids), best.linked.status, best.linked.prev_event_id),
+                         source_count=max(1, len({a.source_id for a in arts})),
+                         followed=any(m.followed for m in members), score=0.0)
+        for m in members:
+            replace_at[m.linked.article_ids] = merged if m is best else None
+    new = []
+    for c in candidates:
+        if c.linked.article_ids not in replace_at:
+            new.append(c)
+        elif replace_at[c.linked.article_ids] is not None:
+            new.append(replace_at[c.linked.article_ids])
+    return select(new, settings)

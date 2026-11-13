@@ -8,7 +8,7 @@ from conftest import FakeLLM, make_settings
 from dailynews.cluster import Linked
 from dailynews.feeds import Item
 from dailynews.llm import BudgetExceeded, LLMError
-from dailynews.rank import Candidate, classify, select
+from dailynews.rank import Candidate, classify, merge_placed, select
 from dailynews.store import Store
 
 NOW = datetime(2026, 11, 12, 15, 0, tzinfo=timezone.utc)
@@ -163,3 +163,83 @@ def test_stale_goes_to_hidden(store, settings):
     llm2 = FakeLLM([])
     classify([Linked((a,), "stale", 3)], store, settings, llm2)
     assert llm2.calls == []
+
+
+# ---------- merge（选出后的跨批合并） ----------
+
+def _four(store, settings):
+    """A>B>C>D 四个 world 事件（A、B 是同一件事，来源不同）；top 2 条、每类 1 条。"""
+    s = replace(settings, top_count=2, per_category=1)
+    a = _add(store, 1, "Ceasefire agreed in Gaza", summary="Negotiators agreed a ceasefire. " + "x" * 300)
+    b = _add(store, 2, "Gaza truce deal reached", source="gd", summary="A truce was reached.")
+    c = _add(store, 3, "Chip export rules tightened")
+    d = _add(store, 4, "Rail strike called off")
+    cands = [_cand([a], imp=5), _cand([b], imp=4), _cand([c], imp=3), _cand([d], imp=2)]
+    return s, cands, (a, b, c, d)
+
+
+def _placed(sel, settings):
+    out = [c.linked.article_ids for c in sel.top]
+    for cat in settings.categories:
+        out.extend(c.linked.article_ids for c in sel.by_category.get(cat.id, []))
+    return out
+
+
+def test_merge_combines_placed_events_and_backfills(store, settings):
+    s, cands, (a, b, c, d) = _four(store, settings)
+    sel = select(cands, s)
+    assert _placed(sel, s) == [(a,), (b,), (c,)]
+    llm = FakeLLM({"merge": lambda sy, u: {"merge": [[1, 2]]}})
+    out = merge_placed(sel, cands, store, s, llm)
+    assert _placed(out, s) == [(a, b), (c,), (d,)]           # 合并后空出的位置由下一条补上
+    merged = out.top[0]
+    assert merged.source_count == 2 and merged.importance == 5 and merged.category == "world"
+    assert merged.linked.status == "new" and out.filtered == sel.filtered
+    task, system, user = llm.calls[0]
+    assert task == "merge" and system.startswith("任务：merge\n")
+    assert "[1] Ceasefire agreed in Gaza" in user and "[3] Chip export rules tightened" in user
+    assert "Negotiators agreed a ceasefire." in user and "x" * 120 not in user   # 简介只取前 120 字
+    assert "Rail strike" not in user                       # 只看已选出的事件
+
+
+def test_merge_keeps_best_member_status_and_dedupes_ids(store, settings):
+    s, cands, (a, b, c, d) = _four(store, settings)
+    cands[0] = Candidate(Linked((a,), "followup", 42), "world", False, 5)
+    cands[1] = _cand([b, a], imp=4)
+    out = merge_placed(select(cands, s), cands, store, s, FakeLLM({"merge": lambda sy, u: {"merge": [[2, 1]]}}))
+    top = out.top[0]
+    assert top.linked == Linked((a, b), "followup", 42)
+
+
+@pytest.mark.parametrize("reply", [
+    {"merge": [[1, 4]]},              # 编号越界
+    {"merge": [[1, 2], [2, 3]]},      # 编号重复
+    {"merge": [[1]]},                 # 组不足两个
+    {"merge": [[1, True]]},
+    {"merge": [1, 2]},
+    {"merge": "1,2"},
+    {"groups": [[1, 2]]},
+])
+def test_merge_invalid_output_ignored(store, settings, reply):
+    s, cands, ids = _four(store, settings)
+    sel = select(cands, s)
+    assert merge_placed(sel, cands, store, s, FakeLLM({"merge": lambda sy, u: reply})) == sel
+
+
+@pytest.mark.parametrize("exc", [LLMError("HTTP 500"), BudgetExceeded("上限")])
+def test_merge_llm_failure_ignored(store, settings, exc):
+    s, cands, ids = _four(store, settings)
+    sel = select(cands, s)
+
+    def fail(sy, u):
+        raise exc
+
+    assert merge_placed(sel, cands, store, s, FakeLLM({"merge": fail})) == sel
+
+
+def test_merge_skipped_with_fewer_than_two_placed(store, settings):
+    a = _add(store, 1, "Only story")
+    cands = [_cand([a])]
+    sel = select(cands, settings)
+    llm = FakeLLM({})
+    assert merge_placed(sel, cands, store, settings, llm) == sel and llm.calls == []
