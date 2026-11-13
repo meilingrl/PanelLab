@@ -34,13 +34,13 @@ def _top_events(store, issue, limit):
     return [(r[0], _one_sentence(r[1])) for r in rows]
 
 
-def _compose(settings, issue, items, link):
+def _compose(settings, issue, items, link, degraded=False):
     msg = EmailMessage()
     sender = _flat(settings.smtp.sender)
     msg["From"] = sender
     msg["To"] = ", ".join(_flat(r) for r in settings.smtp.recipients)
     first = items[0][0] if items else EMPTY_TEXT
-    msg["Subject"] = _flat("每日简报 %s：%s" % (issue, first))
+    msg["Subject"] = _flat("每日简报 %s：%s%s" % (issue, first, "（部分降级）" if degraded else ""))
     if items:
         lines = ["%d. %s\n   %s" % (i, t, s) if s else "%d. %s" % (i, t)
                  for i, (t, s) in enumerate(items, 1)]
@@ -70,7 +70,7 @@ def run_notify(settings, store, now: datetime, password: str) -> int:
     items = _top_events(store, issue, settings.notify_top)
     client = None
     try:
-        msg = _compose(settings, issue, items, link)
+        msg = _compose(settings, issue, items, link, degraded=row[0] == "degraded")
         msg["Date"] = format_datetime(now)
         sender = _flat(cfg.sender)
         recipients = [_flat(r) for r in cfg.recipients]

@@ -145,11 +145,12 @@ def _event_html(ev: EventOut, cat_names: Dict[str, str], show_cat: bool) -> str:
         parts.append('<div class="tags">%s</div>' % "".join(tags))
     parts.append('<h3 class="title">%s</h3>' % _e(ev.title_zh))
     if ev.status == "followup" and (ev.change_zh or ev.prev_issue):
-        line = '<span class="change-label">新变化</span>%s' % _e(ev.change_zh or "")
+        bits = ['<span class="change-label">新变化</span>%s' % _e(ev.change_zh)] if ev.change_zh else []
         prev = _issue_date(ev.prev_issue)
         if prev is not None:
-            line += ' <a class="prev" href="../%s/">前情：%s</a>' % (prev.isoformat(), _short_date(prev))
-        parts.append('<p class="change">%s</p>' % line)
+            bits.append('<a class="prev" href="../%s/">前情：%s</a>' % (prev.isoformat(), _short_date(prev)))
+        if bits:
+            parts.append('<p class="change">%s</p>' % " ".join(bits))
     if ev.summary_zh:
         parts.append('<p class="summary">%s</p>' % _e(ev.summary_zh))
 

@@ -113,6 +113,17 @@ def test_followup_links_previous_issue(tmp_path, settings):
     assert 'href="../2026-11-11/"' in html
 
 
+def test_change_label_only_when_change_text(tmp_path, settings):
+    ev = _ev(status="followup", prev_issue="2026-11-10", change=None)
+    render_issue(DAY, [ev], [], settings, str(tmp_path))
+    html = _page(tmp_path)
+    assert 'class="change-label"' not in html
+    assert 'href="../2026-11-10/"' in html and "前情：11月10日" in html     # 前情链接仍在
+    render_issue(DAY, [_ev(status="followup", prev_issue="2026-11-10", change="停火生效。")], [], settings,
+                 str(tmp_path))
+    assert '<span class="change-label">新变化</span>停火生效。' in _page(tmp_path)
+
+
 def test_degraded_and_snippet_labels(tmp_path, settings):
     render_issue(DAY, [_ev(degraded=True), _ev(basis="snippet")], [], settings, str(tmp_path))
     html = _page(tmp_path)

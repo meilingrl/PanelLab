@@ -110,6 +110,14 @@ def test_zero_events_still_sends(tmp_path, smtp_server):
     assert "今天没有新的要闻" in text and "https://news.example.com/2026-11-13/" in html
 
 
+def test_degraded_issue_subject_marked(tmp_path, smtp_server):
+    _, s = _settings(tmp_path, smtp_server.port)
+    st = _store(tmp_path, status="degraded", events=SEVEN[:2])
+    assert notify.run_notify(s, st, NOW, "") == 0
+    msg = _parse(smtp_server.messages[0][2])
+    assert msg["Subject"] == "每日简报 2026-11-13：事件1（部分降级）"
+
+
 def test_issue_date_uses_settings_timezone(tmp_path, smtp_server):
     _, s = _settings(tmp_path, smtp_server.port)
     st = _store(tmp_path, events=SEVEN[:1])
