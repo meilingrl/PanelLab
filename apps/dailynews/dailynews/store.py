@@ -109,6 +109,13 @@ class Build:
     note: Optional[str]
 
 
+@dataclass(frozen=True)
+class IssueRow:
+    date: str            # YYYY-MM-DD
+    item_count: int
+    status: Optional[str]
+
+
 class Store:
     def __init__(self, path):
         self.conn = sqlite3.connect(path)
@@ -189,6 +196,12 @@ class Store:
         if r is None:
             return None
         return Build(r[0], from_iso(r[1]), from_iso(r[2]), r[3], r[4], r[5])
+
+    def list_issues(self) -> List[IssueRow]:
+        """所有期（含失败的），新期在前。"""
+        rows = self.conn.execute(
+            "select date, item_count, status from issues order by date desc").fetchall()
+        return [IssueRow(r[0], r[1] or 0, r[2]) for r in rows]
 
     def llm_calls_today(self, day) -> int:
         r = self.conn.execute("select count from llm_calls where day = ?", (day.isoformat(),)).fetchone()
