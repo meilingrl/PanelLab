@@ -165,6 +165,11 @@ class Store:
             (since_issue.isoformat(), before_issue.isoformat())).fetchall()
         return [EventRow(r[0], date.fromisoformat(r[1]), r[2], r[3], r[4]) for r in rows]
 
+    def event_issue_date(self, event_id) -> Optional[str]:
+        """事件所在期号（YYYY-MM-DD）；事件不存在时为 None。"""
+        r = self.conn.execute("select issue_date from events where id = ?", (event_id,)).fetchone()
+        return r[0] if r else None
+
     def start_build(self, started_at, issue_date=None) -> int:
         with self.conn:
             cur = self.conn.execute("insert into builds(started_at, issue_date) values (?, ?)",
