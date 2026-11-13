@@ -205,3 +205,40 @@ def test_cli_notify_success_message(tmp_path, smtp_server, capsys):
     os.replace(str(tmp_path / "n.db"), os.path.join(s.data_dir, "dailynews.db"))
     assert cli.main(["--settings", p, "notify", "--now", "2026-11-13T07:30:00+08:00"]) == 0
     assert "已发送 2026-11-13 的提醒给 2 位收件人" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("security,port", [("starttls", 587), ("ssl", 465), ("none", 25)])
+def test_port_zero_defaults(tmp_path, monkeypatch, security, port):
+    seen = []
+
+    class Fake:
+        def __init__(self, host, p, **kw):
+            seen.append(p)
+
+        def __getattr__(self, name):
+            return lambda *a, **kw: None
+
+    monkeypatch.setattr(smtplib, "SMTP", Fake)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", Fake)
+    _, s = _settings(tmp_path, 0, security=security)
+    st = _store(tmp_path, events=SEVEN[:1])
+    assert notify.run_notify(s, st, NOW, "") == 0
+    assert seen == [port]
+
+
+def test_header_injection_blocked(tmp_path, smtp_server):
+    _, s = _settings(tmp_path, smtp_server.port,
+                     sender="news@example.com\r\nBcc: x@evil.example",
+                     recipients=["a@example.com", "b@example.com\r\nBcc: y@evil.example"])
+    st = _store(tmp_path, events=[("A\r\nBcc: x@evil.example", "摘要。", "top", 5)])
+    notify.run_notify(s, st, NOW, "")
+    assert smtp_server.messages
+    for frm, rcpts, raw in smtp_server.messages:
+        msg = _parse(raw)
+        assert msg["Bcc"] is None
+        for name in ("Subject", "From", "To"):
+            assert "\n" not in str(msg[name]) and "\r" not in str(msg[name])
+        head = raw.split(b"\r\n\r\n", 1)[0]
+        assert b"\nBcc:" not in head and b"\r\nBcc:" not in head
+        assert "x@evil.example" not in rcpts
+        assert not any(r.startswith("\n") or "\n" in r or "\r" in r for r in rcpts)

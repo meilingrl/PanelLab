@@ -20,3 +20,7 @@ SMTP 的 host 留空时不校验 SMTP 其它字段；填写 host 后要求有发
 
 来源清单里没有 Reuters、AP、AFP：它们没有公开的官方订阅地址，不虚构地址；`agency`（通讯社）仍是合法的来源类型，以后有官方订阅时可直接加入。
 地址不确定的来源（NHK World、ECB、美联储、IMF、Google DeepMind、Google AI）先设为 `"enabled": false`，由 Task 11 的 check-sources 核实后再启用。
+
+## 提醒邮件端口
+
+`smtp.port` 留 0 时，`notify` 按 security 取默认端口：ssl 465、starttls 587、none 25。这与 Agent 告警邮件的默认值（ssl 465，其余 25）有意不同：云服务器常封锁出站 25 端口，starttls 应走 587。
