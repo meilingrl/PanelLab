@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="$default_theme" data-default="$default_theme">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<title>$title</title>
+<script>(function(){var t=null;try{t=localStorage.getItem("dailynews-theme")}catch(e){}if(t!=="light"&&t!=="dark"){t=(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"$default_theme"}document.documentElement.setAttribute("data-theme",t)})();</script>
+<link rel="stylesheet" href="$css">
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap">
+    <div class="brand-row">
+      <div>
+        <p class="brand">每日简报</p>
+        <h1 class="date">$date_long</h1>
+        <p class="sub">$count</p>
+      </div>
+      <button type="button" class="theme-toggle" aria-label="切换浅色/深色" hidden>
+        <span class="to-dark">深色</span><span class="to-light">浅色</span>
+      </button>
+    </div>
+    <nav class="issue-nav" aria-label="期号">$nav</nav>
+  </div>
+</header>
+$filters
+<main class="wrap">
+$main
+</main>
+<footer class="wrap foot">
+$hidden
+<p class="foot-links"><a href="../archive.html">往期简报</a></p>
+</footer>
+<script src="$js"></script>
+</body>
+</html>

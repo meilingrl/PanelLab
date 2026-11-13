@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>World news | The Guardian</title>
+    <link>https://www.theguardian.com/world</link>
+    <language>en-gb</language>
+    <item>
+      <title>Election results delayed</title>
+      <link>https://www.theguardian.com/world/2026/nov/10/election-delayed</link>
+      <description>&lt;p&gt;Counting continues &lt;a href="https://x.example"&gt;amid dispute&lt;/a&gt;.&lt;/p&gt;</description>
+      <pubDate>Tue, 10 Nov 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

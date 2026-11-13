@@ -126,7 +126,7 @@ Agent 已安装时，点状态栏上的「升级 / 重新安装 Agent」，会�
 
 ## 示例：把旧 DailyNews 迁到 Agent
 
-现状（2026-11-10 的服务器）：账户 `newsbot` 下有两个 systemd 用户定时器，23:20、23:40、23:50 准备，00:00 发送（Asia/Shanghai）；代码在 `/srv/news-briefing`，配置在 `~newsbot/.config/news-briefing/env`。下面的步骤由你在服务器上自己完成；PanelLab 不会改动旧 DailyNews。这里迁移的是**现有程序**，新版 DailyNews（第三阶段）还不存在。
+现状（2026-11-10 的服务器）：账户 `newsbot` 下有两个 systemd 用户定时器，23:20、23:40、23:50 准备，00:00 发送（Asia/Shanghai）；代码在 `/srv/news-briefing`，配置在 `~newsbot/.config/news-briefing/env`。下面的步骤由你在服务器上自己完成；PanelLab 不会改动旧 DailyNews。这里迁移的是**现有程序**；新版 DailyNews 的安装与使用见 [dailynews.md](dailynews.md)。
 
 1. **看清旧作业实际运行什么。** 先以 `newsbot` 身份列出实际存在的定时器，不要假设单元名：
 

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+  <channel>
+    <title>BBC News - World</title>
+    <link>https://www.bbc.co.uk/news/world</link>
+    <item>
+      <title>Floods hit southern region</title>
+      <description><![CDATA[Heavy rain has <b>flooded</b> towns &amp; villages.]]></description>
+      <link>https://www.bbc.com/news/world-1001?utm_source=rss&amp;utm_medium=feed#comments</link>
+      <pubDate>Tue, 10 Nov 2026 08:30:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Talks resume in capital</title>
+      <description>Negotiators return to the table.</description>
+      <link>https://www.bbc.com/news/world-1002?fbclid=abc123&amp;id=7</link>
+      <pubDate>Mon, 09 Nov 2026 20:00:00 +0800</pubDate>
+    </item>
+    <item>
+      <title>Undated item</title>
+      <description>No date here.</description>
+      <link>https://www.bbc.com/news/world-1003</link>
+    </item>
+  </channel>
+</rss>
