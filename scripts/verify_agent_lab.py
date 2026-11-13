@@ -4,6 +4,7 @@
 Build (done automatically): docker build -t panellab-agent-lab:20261110 scripts/fixtures/agent_systemd
 Run: python3 scripts/verify_agent_lab.py [--keep]
      .venv311/bin/python scripts/verify_agent_lab.py --panel   (needs the backend requirements)
+     python3 scripts/verify_agent_lab.py --dailynews
 
 --panel drives the same fixture through PanelLab's own backend API instead: a backend from
 backend/ is started with this interpreter on a random loopback port with a disposable MySQL
@@ -17,6 +18,14 @@ backend, that container and the temp directory are removed on exit.
 Everything runs through `docker exec` as the fixture's `admin` user, with `sudo -n`
 where root is needed (admin has NOPASSWD sudo in this fixture only). Mail goes to the
 fixture's SMTP sink on 127.0.0.1:2525, which stores each message in /var/mail-sink/.
+
+--dailynews installs the Agent the same way, then DailyNews from make_bundle's tarball, writes a
+lab settings.json whose sources and OpenAI-compatible endpoint point at a small HTTP server
+inside the container (127.0.0.1:8790: fixture RSS, article pages, a fake chat/completions that
+answers by the `任务：<name>` first line of the system prompt) and whose SMTP is the mail sink.
+It creates dailynews-build and dailynews-notify through panellab-agentctl (obviously fake
+secret_env values), runs them, checks the site files, the reminder mail, and that a build with
+every source down makes the Agent send its failure alert.
 
 Only the container named panellab-agent-lab is created and removed here (also on Ctrl-C);
 no other containers, images, networks or volumes are touched. Never points at a real server.
@@ -769,11 +778,402 @@ def main_panel(opts: argparse.Namespace) -> int:
     return 0
 
 
+# -------------------------------------------------------------- --dailynews
+
+DAILYNEWS = ROOT / "apps" / "dailynews"
+DN_LAB_DIR = "/home/admin/dnlab"
+DN_PORT = 8790
+DN_FAKE_LLM_KEY = "lab-fake-llm-key-not-a-real-secret"
+DN_FAKE_SMTP_PASSWORD = "lab-fake-smtp-password-not-a-real-secret"
+DN_SCRIPT_MARK = "<script>alert(1)</script>"
+
+# Runs inside the container as admin. Feeds are generated per request with pubDate two hours
+# before "now", so a build at any real time picks them up.
+DN_SERVER = r'''
+import json, re, sys, threading
+from email.utils import formatdate
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import time
+
+PORT = int(sys.argv[1])
+KEY = sys.argv[2]
+BASE = "http://127.0.0.1:%d" % PORT
+FEEDS = {
+    "wire": [("flood-a", "Floods hit southern coastal region"),
+             ("summit-a", "Leaders meet for climate summit in Geneva"),
+             ("rates-a", "Central bank holds interest rates steady")],
+    "daily": [("flood-b", "Coastal floods displace thousands"),
+              ("chip-b", "Chip maker unveils faster AI processor"),
+              ("aid-b", "Ministers &amp; allies agree on aid package")],
+}
+stats = {"llm_calls": 0, "bad_auth": 0, "tasks": {}}
+lock = threading.Lock()
+
+def rss(name):
+    pub = formatdate(time.time() - 7200, usegmt=True)
+    items = "".join("<item><title>%s</title><link>%s/a/%s</link><pubDate>%s</pubDate>"
+                    "<description>Lab summary for %s.</description></item>" % (t, BASE, slug, pub, slug)
+                    for slug, t in FEEDS[name])
+    return ('<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>%s</title>%s'
+            '</channel></rss>' % (name, items)).encode()
+
+def article(slug):
+    paras = "".join("<p>Paragraph %d of the lab article %s. It has enough plain words to count as body "
+                    "text for the extractor, describing what happened, who said what, and what comes "
+                    "next in this entirely made-up story.</p>" % (i, slug) for i in range(1, 7))
+    return ("<html><head><title>%s</title></head><body><article><h1>%s</h1>%s</article></body></html>"
+            % (slug, slug, paras)).encode()
+
+def numbered(user):
+    return [int(n) for n in re.findall(r"^\[(\d+)\]", user, re.M)]
+
+def answer(task, user):
+    if task == "cluster":
+        return {"groups": [[n] for n in numbered(user)]}
+    if task == "link":
+        return {"results": [{"group": int(g), "decision": "new", "event_id": None}
+                            for g in re.findall(r"^第 (\d+) 组", user, re.M)]}
+    if task == "classify":
+        body = user.split("事件组：", 1)[-1]
+        items = []
+        for block in re.split(r"(?m)^(?=\[\d+\])", body):
+            m = re.match(r"\[(\d+)\]", block)
+            if m:
+                items.append({"i": int(m.group(1)), "category": "tech" if "Chip" in block else "world",
+                              "china_domestic": False, "importance": 4})
+        return {"items": items}
+    if task == "summarize":
+        items = []
+        for block in re.split(r"(?m)^(?=\[\d+\])", user):
+            m = re.match(r"\[(\d+)\]", block)
+            if not m:
+                continue
+            orig = re.search(r"原标题：(.*)", block).group(1).strip()
+            items.append({"i": int(m.group(1)), "title_zh": "实验室译文：" + orig,
+                          "summary_zh": "实验室摘要第一句 %s &。第二句。" % SCRIPT_MARK,
+                          "detail_zh": "实验室详情。", "change_zh": "实验室新变化。" if "followup" in block else None})
+        return {"items": items}
+    return {}
+
+SCRIPT_MARK = sys.argv[3]
+
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+    def log_message(self, *a):
+        pass
+    def send(self, status, body, ctype):
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def do_GET(self):
+        p = self.path.split("?", 1)[0]
+        m = re.fullmatch(r"/feeds/(\w+)\.xml", p)
+        if m and m.group(1) in FEEDS:
+            return self.send(200, rss(m.group(1)), "application/rss+xml; charset=utf-8")
+        m = re.fullmatch(r"/a/([\w-]+)", p)
+        if m:
+            return self.send(200, article(m.group(1)), "text/html; charset=utf-8")
+        if p == "/stats":
+            with lock:
+                return self.send(200, json.dumps(stats).encode(), "application/json")
+        self.send(404, b"not found", "text/plain")
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path != "/v1/chat/completions":
+            return self.send(404, b"not found", "text/plain")
+        req = json.loads(body)
+        system, user = req["messages"][0]["content"], req["messages"][1]["content"]
+        first = system.split("\n", 1)[0].strip()
+        task = first[3:].strip() if first.startswith("任务：") else None
+        with lock:
+            stats["llm_calls"] += 1
+            stats["tasks"][str(task)] = stats["tasks"].get(str(task), 0) + 1
+            if self.headers.get("Authorization") != "Bearer " + KEY:
+                stats["bad_auth"] += 1
+                return self.send(401, b'{"error":"bad key"}', "application/json")
+        out = {"choices": [{"message": {"role": "assistant",
+                                        "content": json.dumps(answer(task, user), ensure_ascii=False)}}]}
+        self.send(200, json.dumps(out).encode(), "application/json")
+
+ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
+'''
+
+DN_PROBE = r"""
+import json, sys, urllib.request
+print(urllib.request.urlopen("http://127.0.0.1:%s/stats" % sys.argv[1], timeout=3).read().decode())
+"""
+
+
+def dn_jobs() -> List[Dict[str, Any]]:
+    """The two job definitions exactly as docs/user/dailynews.md and install.sh give them."""
+    return [
+        {"job": {"id": "dailynews-build", "name": "DailyNews 生成",
+                 "command": ["/usr/bin/python3", "-m", "dailynews", "build"],
+                 "workdir": "/srv/dailynews/app",
+                 "schedule": {"cron": ["20 23 * * *"], "tz": "Asia/Shanghai"},
+                 "timeout_seconds": 1800, "retries": 2, "retry_delay_seconds": 600,
+                 "catch_up_window_minutes": 60},
+         "secret_env": {"DAILYNEWS_LLM_API_KEY": DN_FAKE_LLM_KEY}},
+        {"job": {"id": "dailynews-notify", "name": "DailyNews 提醒",
+                 "command": ["/usr/bin/python3", "-m", "dailynews", "notify"],
+                 "workdir": "/srv/dailynews/app",
+                 "schedule": {"cron": ["0 0 * * *"], "tz": "Asia/Shanghai"},
+                 "timeout_seconds": 120, "retries": 1, "retry_delay_seconds": 300,
+                 "catch_up_window_minutes": 60},
+         "secret_env": {"DAILYNEWS_SMTP_PASSWORD": DN_FAKE_SMTP_PASSWORD}},
+    ]
+
+
+class DailyNewsLab(Lab):
+    def __init__(self, workdir: Path) -> None:
+        super().__init__()
+        self.workdir = workdir
+        self.revisions: Dict[str, int] = {}
+
+    def no_fake_secrets(self, text: str) -> bool:
+        return DN_FAKE_LLM_KEY not in text and DN_FAKE_SMTP_PASSWORD not in text
+
+    def install_agent(self) -> None:
+        bundle = self.copy_bundle()
+        r = self.install(bundle)
+        self.check("agent install.sh exits 0", r.returncode == 0 and self.is_active() == "active",
+                   r.stderr[-1500:] + r.stdout[-800:])
+        self.ctl("alerts.configure", {"smtp": {"host": "127.0.0.1", "port": 2525, "security": "none",
+                                               "username": None, "from": "agent@lab.test",
+                                               "to": ["admin@lab.test"]}})
+
+    def copy_dailynews(self) -> str:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("dailynews_make_bundle", DAILYNEWS / "make_bundle.py")
+        mb = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mb)
+        path = Path(mb.build_bundle(str(self.workdir)))
+        again = Path(mb.build_bundle(str(self.workdir / "again")))
+        self.check("make_bundle output is byte-identical across runs", path.read_bytes() == again.read_bytes())
+        run(["docker", "cp", str(path), "%s:/home/admin/%s" % (CONTAINER, path.name)])
+        dexec("chown", "admin:admin", "/home/admin/" + path.name, user="root")
+        dexec("tar", "-xzf", "/home/admin/" + path.name, "-C", "/home/admin")
+        return "/home/admin/" + path.name[:-len(".tar.gz")]
+
+    def stat(self, *paths: str) -> List[str]:
+        return [ln for ln in root("stat", "-c", "%n %U:%G %a", *paths).stdout.split("\n") if ln]
+
+    def install_dailynews(self, bundle: str) -> None:
+        r = self.install(bundle)
+        self.check("dailynews install.sh exits 0", r.returncode == 0, r.stderr[-1500:] + r.stdout[-800:])
+        self.check("first install creates settings from the defaults and validates them as panellab",
+                   "已创建设置文件" in r.stdout and "设置有效" in r.stdout, r.stdout[-800:])
+        self.check("installer prints both job definitions",
+                   all(s in r.stdout for s in ('"dailynews-build"', '"dailynews-notify"', '"20 23 * * *"',
+                                               '"0 0 * * *"', "DAILYNEWS_LLM_API_KEY",
+                                               "DAILYNEWS_SMTP_PASSWORD")), r.stdout[-1200:])
+        perms = self.stat("/srv/dailynews", "/srv/dailynews/app", "/srv/dailynews/app/dailynews",
+                          "/srv/dailynews/app/dailynews/cli.py", "/srv/dailynews/app/dailynews/templates/page.html",
+                          "/srv/dailynews/site", "/var/lib/dailynews", "/srv/dailynews/settings.json")
+        want = ["/srv/dailynews root:root 755", "/srv/dailynews/app root:root 755",
+                "/srv/dailynews/app/dailynews root:root 755", "/srv/dailynews/app/dailynews/cli.py root:root 644",
+                "/srv/dailynews/app/dailynews/templates/page.html root:root 644",
+                "/srv/dailynews/site panellab:panellab 755", "/var/lib/dailynews panellab:panellab 750",
+                "/srv/dailynews/settings.json panellab:panellab 640"]
+        self.check("dailynews owners and modes", perms == want, json.dumps(perms))
+        writable = dexec("sh", "-c", "test -w /srv/dailynews/app/dailynews && echo yes || echo no",
+                         user="panellab", check=False).stdout.strip()
+        self.check("program not writable by panellab", writable == "no", writable)
+        leftovers = root("sh", "-c", "ls -A /srv/dailynews").stdout.split()
+        self.check("no staging leftovers in /srv/dailynews", sorted(leftovers) == ["app", "settings.json", "site"],
+                   json.dumps(leftovers))
+        for path in ("/etc/nginx", "/srv/news-briefing"):
+            self.check("installer created nothing at %s" % path, not self.path_exists(path))
+
+    def write_settings(self) -> str:
+        raw = json.loads((DAILYNEWS / "default_settings.json").read_text(encoding="utf-8"))
+        base = "http://127.0.0.1:%d" % DN_PORT
+        raw["sources"] = [
+            {"id": "lab-wire", "name": "Lab Wire", "url": base + "/feeds/wire.xml", "kind": "rss",
+             "category": "world", "type": "agency", "enabled": True},
+            {"id": "lab-daily", "name": "Lab Daily", "url": base + "/feeds/daily.xml", "kind": "rss",
+             "category": "world", "type": "media", "enabled": True},
+        ]
+        raw["llm"]["base_url"] = base + "/v1"
+        raw["llm"]["timeout"] = 10
+        raw["smtp"] = {"host": "127.0.0.1", "port": 2525, "security": "none", "username": "",
+                       "sender": "dailynews@lab.test", "recipients": ["admin@lab.test"]}
+        text = json.dumps(raw, ensure_ascii=False, indent=2)
+        dexec("sh", "-c", 'mkdir -p "$0" && cat > "$0/settings.json"', DN_LAB_DIR, input=text)
+        # Stand-in for the user editing the file: same owner and mode as the installer's copy.
+        root("install", "-o", "panellab", "-g", "panellab", "-m", "0640",
+             DN_LAB_DIR + "/settings.json", "/srv/dailynews/settings.json")
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def reinstall_keeps_settings(self, bundle: str, digest: str) -> None:
+        r = self.install(bundle)
+        now = root("sha256sum", "/srv/dailynews/settings.json").stdout.split()[0]
+        self.check("reinstall keeps the edited settings.json and validates it",
+                   r.returncode == 0 and "保留已有设置文件" in r.stdout and "设置有效：2 个来源" in r.stdout
+                   and now == digest, r.stdout[-800:] + r.stderr[-800:])
+        perms = self.stat("/srv/dailynews/settings.json")
+        self.check("settings.json still panellab:panellab 0640", perms == ["/srv/dailynews/settings.json "
+                                                                          "panellab:panellab 640"], json.dumps(perms))
+
+    def start_server(self) -> None:
+        dexec("sh", "-c", 'mkdir -p "$0" && cat > "$0/server.py"', DN_LAB_DIR, input=DN_SERVER)
+        run(["docker", "exec", "-d", "-u", "admin", CONTAINER, "python3", DN_LAB_DIR + "/server.py",
+             str(DN_PORT), DN_FAKE_LLM_KEY, DN_SCRIPT_MARK])
+        wait_for("lab feed/LLM server", self.server_stats, timeout=20)
+
+    def stop_server(self) -> None:
+        dexec("pkill", "-f", DN_LAB_DIR + "/server.py", check=False)
+        wait_for("lab server to stop", lambda: dexec("pgrep", "-f", DN_LAB_DIR + "/server.py",
+                                                     check=False).returncode != 0, timeout=10)
+
+    def server_stats(self) -> Dict[str, Any]:
+        return json.loads(dexec("python3", "-c", DN_PROBE, str(DN_PORT)).stdout)
+
+    def create_jobs(self) -> None:
+        for spec in dn_jobs():
+            created = self.ctl("jobs.create", spec)
+            self.revisions[created["id"]] = created["revision"]
+            self.check("jobs.create %s accepted with the documented fields" % created["id"],
+                       created["command"] == spec["job"]["command"]
+                       and created["schedule"] == spec["job"]["schedule"]
+                       and created.get("secret_env") == [{"name": n, "status": "已设置"}
+                                                         for n in spec["secret_env"]]
+                       and self.no_fake_secrets(json.dumps(created, ensure_ascii=False)),
+                       json.dumps(created, ensure_ascii=False)[:500])
+
+    def update_job(self, job_id: str, changes: Dict[str, Any]) -> None:
+        updated = self.ctl("jobs.update", {"id": job_id, "revision": self.revisions[job_id], "changes": changes})
+        self.revisions[job_id] = updated["revision"]
+
+    def run_job(self, job_id: str, timeout: float = 240) -> "tuple[Dict[str, Any], str]":
+        rid = self.ctl("jobs.run_now", {"id": job_id})["run_id"]
+        done = self.wait_run_done(job_id, rid, timeout=timeout)
+        out = self.ctl("runs.output", {"run_id": rid, "offset": 0, "limit": 65536})["data"]
+        return done, out
+
+    def site_listing(self) -> List[str]:
+        out = root("find", "/srv/dailynews/site", "-printf", "%y %u:%g %m %P\n").stdout
+        return [ln for ln in out.splitlines() if ln]
+
+    def build_and_publish(self) -> str:
+        mark = len(self.mails())
+        r, out = self.run_job("dailynews-build")
+        self.check("dailynews-build run succeeded (exit 0)", r["status"] == "succeeded" and r["exit_code"] == 0,
+                   json.dumps(r) + "\n" + out[-1500:])
+        m = re.search(r"^期号 (\d{4}-\d{2}-\d{2})$", out, re.M)
+        if not m:
+            raise LabError("build output has no 期号 line: %s" % out[-800:])
+        issue = m.group(1)
+        self.check("build output reports articles and no failed sources",
+                   "新文章 6" in out and "来源失败：无" in out, out[-800:])
+        stats = self.server_stats()
+        self.check("fake LLM was called with the secret env key as Bearer token",
+                   stats["llm_calls"] > 0 and stats["bad_auth"] == 0
+                   and {"cluster", "classify", "summarize"} <= set(stats["tasks"]), json.dumps(stats))
+
+        listing = self.site_listing()
+        need = {"index.html", "archive.html", issue + "/index.html"}
+        have = {ln.split(" ", 3)[3] for ln in listing}
+        self.check("site has index.html, archive.html and %s/index.html" % issue, need <= have, json.dumps(listing))
+        bad = [ln for ln in listing if not (ln.startswith("d panellab:panellab 755 ")
+                                            or ln.startswith("f panellab:panellab 644 "))]
+        self.check("site dirs 0755 / files 0644, owned by panellab (agent UMask 0007)", not bad, json.dumps(bad))
+        index = root("cat", "/srv/dailynews/site/index.html").stdout
+        self.check("index.html links the issue", 'href="%s/"' % issue in index, index[-600:])
+        page = root("cat", "/srv/dailynews/site/%s/index.html" % issue).stdout
+        self.check("issue page shows the translated titles", "实验室译文：" in page, page[:400])
+        self.check("LLM text is escaped on the page",
+                   DN_SCRIPT_MARK not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page, page[:400])
+        everything = root("sh", "-c", "cat /srv/dailynews/site/*.html /srv/dailynews/site/*/*").stdout
+        self.check("no secret value in the site or the run output",
+                   self.no_fake_secrets(everything) and self.no_fake_secrets(out))
+        fails = [x["subject"] for x in self.mails()[mark:] if "作业失败" in x["subject"]]
+        self.check("no failure alert for the good build", not fails, json.dumps(fails, ensure_ascii=False))
+        return issue
+
+    def notify(self, issue: str) -> None:
+        # The issue is "tomorrow" after 12:00; pin notify to 00:00:30 of that day so the lab is
+        # independent of the wall clock. The command is otherwise the documented one.
+        self.update_job("dailynews-notify", {"command": ["/usr/bin/python3", "-m", "dailynews", "notify",
+                                                         "--now", "%sT00:00:30+08:00" % issue]})
+        mark = len(self.mails())
+        r, out = self.run_job("dailynews-notify", timeout=60)
+        self.check("dailynews-notify run succeeded", r["status"] == "succeeded", json.dumps(r) + out[-800:])
+        mail = self.wait_mail(r"每日简报 %s" % re.escape(issue), mark)
+        link = "https://news.panellab.cn/%s/" % issue
+        self.check("reminder mail arrived with the issue link", link in mail["body"],
+                   mail["subject"] + "\n" + mail["body"][-600:])
+        self.check("reminder lists the translated titles", "实验室译文：" in mail["body"], mail["body"][:400])
+        self.check("no secret value in the reminder", self.no_fake_secrets(mail["body"] + mail["subject"]))
+
+    def failing_build_alerts(self) -> None:
+        # Retries stay on (2), only the delay is shortened so the final attempt comes quickly.
+        self.update_job("dailynews-build", {"retry_delay_seconds": 1})
+        self.stop_server()
+        mark = len(self.mails())
+        rid = self.ctl("jobs.run_now", {"id": "dailynews-build"})["run_id"]
+        mail = self.wait_mail(r"作业失败：DailyNews 生成", mark, timeout=180)
+        self.check("failure alert mail after the retries (all sources and the LLM down)",
+                   HOSTNAME in mail["subject"] and "来源失败" in mail["body"], mail["subject"] + mail["body"][-600:])
+        runs = [x for x in self.runs("dailynews-build") if x["id"] >= rid]
+        self.check("build attempts ended failed with exit 3 (manual + 2 retries)",
+                   len(runs) == 3 and all(x["status"] == "failed" and x["exit_code"] == 3 for x in runs)
+                   and sorted(x["trigger"] for x in runs) == ["manual", "retry", "retry"],
+                   json.dumps(runs)[:800])
+        self.check("no secret value in the alert", self.no_fake_secrets(mail["body"]))
+
+    def uninstall(self, bundle: str) -> None:
+        r = self.install(bundle, "--uninstall")
+        self.check("dailynews --uninstall exits 0", r.returncode == 0, r.stderr[-800:] + r.stdout[-800:])
+        self.check("program removed; settings, data and site kept",
+                   not self.path_exists("/srv/dailynews/app") and self.path_exists("/srv/dailynews/settings.json")
+                   and self.path_exists("/var/lib/dailynews/dailynews.db")
+                   and self.path_exists("/srv/dailynews/site/index.html"))
+
+
+def main_dailynews(opts: argparse.Namespace) -> int:
+    lab: Optional[DailyNewsLab] = None
+    with tempfile.TemporaryDirectory(prefix="panellab-agent-lab-dn-") as tmp:
+        lab = DailyNewsLab(Path(tmp))
+        try:
+            lab.start_fixture()
+            lab.install_agent()
+            bundle = lab.copy_dailynews()
+            lab.install_dailynews(bundle)
+            digest = lab.write_settings()
+            lab.reinstall_keeps_settings(bundle, digest)
+            lab.start_server()
+            lab.create_jobs()
+            issue = lab.build_and_publish()
+            lab.notify(issue)
+            lab.failing_build_alerts()
+            lab.uninstall(bundle)
+        except (LabError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+            lab.check("dailynews lab aborted", False, "%s: %s" % (type(exc).__name__, exc))
+        except KeyboardInterrupt:
+            lab.check("dailynews lab interrupted", False)
+        finally:
+            if opts.keep:
+                print("container %s kept (remove with: docker rm -f %s)" % (CONTAINER, CONTAINER))
+            else:
+                remove_container()
+    if lab.failures:
+        print("dailynews lab: %d check(s) failed" % len(lab.failures))
+        return 1
+    print("dailynews lab: all checks passed")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--keep", action="store_true", help="leave the container running for debugging")
-    parser.add_argument("--panel", action="store_true",
-                        help="drive the fixture through an isolated PanelLab backend instead")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--panel", action="store_true",
+                      help="drive the fixture through an isolated PanelLab backend instead")
+    mode.add_argument("--dailynews", action="store_true",
+                      help="install the Agent and DailyNews, run its two jobs against local fakes")
     opts = parser.parse_args()
 
     def on_term(signum, frame):
@@ -781,6 +1181,8 @@ def main() -> int:
     signal.signal(signal.SIGTERM, on_term)
     if opts.panel:
         return main_panel(opts)
+    if opts.dailynews:
+        return main_dailynews(opts)
 
     lab = Lab()
     try:
