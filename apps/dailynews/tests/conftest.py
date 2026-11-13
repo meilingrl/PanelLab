@@ -191,3 +191,126 @@ class FakeLLM:
 @pytest.fixture
 def fake_llm():
     return FakeLLM([])
+
+
+class FakeSMTPServer:
+    """127.0.0.1 上的极简 SMTP 服务器，只够收信：EHLO/HELO、AUTH PLAIN/LOGIN、MAIL、RCPT、DATA、QUIT。
+
+    messages 记录 (mail_from, [rcpt], 原始邮件字节)；auth_required 为真时未登录不收信；
+    credentials 为 (用户名, 密码)，登录不符返回 535（回复里故意回显收到的密码，用来检验调用方不外泄）。
+    """
+
+    def __init__(self, credentials=None, auth_required=False):
+        import base64
+        import socketserver
+        self.messages = []  # type: list
+        self.credentials = credentials
+        self.auth_required = auth_required
+        self.auth_attempts = []  # type: list
+        outer = self
+
+        class Handler(socketserver.StreamRequestHandler):
+            def _send(self, line):
+                self.wfile.write((line + "\r\n").encode("utf-8"))
+                self.wfile.flush()
+
+            def _check_auth(self, user, pw):
+                outer.auth_attempts.append((user, pw))
+                if outer.credentials is None or (user, pw) == tuple(outer.credentials):
+                    self.authed = True
+                    self._send("235 ok")
+                else:
+                    self._send("535 authentication failed for password %s" % pw)
+
+            def handle(self):
+                self.authed = False
+                mail_from, rcpts = None, []
+                self._send("220 fake smtp")
+                while True:
+                    raw = self.rfile.readline()
+                    if not raw:
+                        return
+                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                    cmd = line.split(" ", 1)[0].upper()
+                    if cmd == "EHLO":
+                        self.wfile.write(b"250-fake\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n")
+                        self.wfile.flush()
+                    elif cmd == "HELO":
+                        self._send("250 fake")
+                    elif cmd == "AUTH":
+                        parts = line.split()
+                        if parts[1].upper() == "PLAIN":
+                            blob = parts[2] if len(parts) > 2 else None
+                            if blob is None:
+                                self._send("334 ")
+                                blob = self.rfile.readline().decode().strip()
+                            _, user, pw = base64.b64decode(blob).decode().split("\0")
+                            self._check_auth(user, pw)
+                        else:
+                            self._send("334 " + base64.b64encode(b"Username:").decode())
+                            user = base64.b64decode(self.rfile.readline().strip()).decode()
+                            self._send("334 " + base64.b64encode(b"Password:").decode())
+                            pw = base64.b64decode(self.rfile.readline().strip()).decode()
+                            self._check_auth(user, pw)
+                    elif cmd == "MAIL":
+                        mail_from = line.split(":", 1)[1].strip().strip("<>").split(">")[0]
+                        rcpts = []
+                        self._send("250 ok")
+                    elif cmd == "RCPT":
+                        rcpts.append(line.split(":", 1)[1].strip().strip("<>").split(">")[0])
+                        self._send("250 ok")
+                    elif cmd == "DATA":
+                        if outer.auth_required and not self.authed:
+                            self._send("530 authentication required")
+                            continue
+                        self._send("354 end with .")
+                        chunks = []
+                        while True:
+                            d = self.rfile.readline()
+                            if d in (b".\r\n", b""):
+                                break
+                            if d.startswith(b".."):
+                                d = d[1:]
+                            chunks.append(d)
+                        outer.messages.append((mail_from, rcpts, b"".join(chunks)))
+                        self._send("250 queued")
+                    elif cmd == "QUIT":
+                        self._send("221 bye")
+                        return
+                    else:
+                        self._send("250 ok")
+
+        class Server(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
+        self.server = Server(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        self._thread = threading.Thread(target=self.server.serve_forever,
+                                        kwargs={"poll_interval": 0.01}, daemon=True)
+        self._thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self._thread.join(timeout=5)
+
+
+@pytest.fixture
+def smtp_server():
+    server = FakeSMTPServer()
+    yield server
+    server.close()
+
+
+@pytest.fixture
+def smtp_server_factory():
+    made = []
+
+    def make(**kw):
+        s = FakeSMTPServer(**kw)
+        made.append(s)
+        return s
+    yield make
+    for s in made:
+        s.close()

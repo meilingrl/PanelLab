@@ -97,11 +97,37 @@ def _build(args):
     return result.exit_code
 
 
-def _not_implemented(name):
-    def run(args):
-        print("%s 尚未实现" % name, file=sys.stderr)
+SMTP_PASSWORD_ENV = "DAILYNEWS_SMTP_PASSWORD"
+
+
+def _notify(args):
+    try:
+        s = load_settings(args.settings)
+    except SettingsError as e:
+        print("设置不合法：%s" % e)
+        return 2
+    m = s.smtp
+    if not m.host or not m.sender or not m.recipients:
+        print("发提醒需要在设置里填写 smtp.host、smtp.sender 和至少一个 smtp.recipients")
+        return 2
+    password = os.environ.get(SMTP_PASSWORD_ENV, "")
+    if m.username and not password:
+        print("缺少 %s" % SMTP_PASSWORD_ENV, file=sys.stderr)
+        return 2
+    from .notify import run_notify
+    from .store import Store
+    now = args.now or datetime.now().astimezone()
+    store = None
+    try:
+        os.makedirs(s.data_dir, exist_ok=True)
+        store = Store(os.path.join(s.data_dir, "dailynews.db"))
+        return run_notify(s, store, now, password)
+    except Exception as e:
+        print("提醒失败：%s" % type(e).__name__)
         return 1
-    return run
+    finally:
+        if store is not None:
+            store.close()
 
 
 def build_parser():
@@ -114,7 +140,10 @@ def build_parser():
     b.add_argument("--now", type=_iso_time, default=None,
                    help="把这个时间当作现在（ISO 时间，带时区；仅用于测试和补跑）")
     b.set_defaults(func=_build)
-    sub.add_parser("notify", help="发送当期提醒邮件").set_defaults(func=_not_implemented("notify"))
+    n = sub.add_parser("notify", help="发送当期提醒邮件")
+    n.add_argument("--now", type=_iso_time, default=None,
+                   help="把这个时间当作现在（ISO 时间，带时区；仅用于测试和补跑）")
+    n.set_defaults(func=_notify)
     return p
 
 
