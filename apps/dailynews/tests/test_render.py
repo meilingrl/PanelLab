@@ -180,28 +180,68 @@ def test_archive_lists_issues(tmp_path, store):
     assert "9 条" in html
 
 
+def _dot_entries(path):
+    return [n for n in os.listdir(str(path)) if n.startswith(".")]
+
+
 def test_publish_is_atomic(tmp_path, settings, monkeypatch):
+    """新 index.html 写到一半出错 → 读者看到的仍是旧的完整页面，不留临时文件。"""
     render_issue(DAY, [_ev("第一版")], [], settings, str(tmp_path))
     before = _page(tmp_path)
     real = render._write_file
-    calls = []
 
-    def flaky(path, data):
-        calls.append(path)
-        if path.endswith("issue.json"):
+    def half_write(path, data):
+        if b"\xe7\xac\xac\xe4\xba\x8c\xe7\x89\x88" in data and b"<html" in data:   # "第二版" 的页面
+            with open(path, "wb") as f:
+                f.write(data[: len(data) // 2])
             raise OSError("disk full")
         real(path, data)
 
-    monkeypatch.setattr(render, "_write_file", flaky)
+    monkeypatch.setattr(render, "_write_file", half_write)
     with pytest.raises(OSError):
         render_issue(DAY, [_ev("第二版")], [], settings, str(tmp_path))
-    assert any(p.endswith("index.html") for p in calls)  # 新页面确实写到一半
     assert _page(tmp_path) == before
-    assert not [n for n in os.listdir(str(tmp_path)) if n.startswith(".")]
+    assert not _dot_entries(tmp_path) and not _dot_entries(tmp_path / "2026-11-13")
     monkeypatch.setattr(render, "_write_file", real)
     render_issue(DAY, [_ev("第二版")], [], settings, str(tmp_path))
     assert "第二版" in _page(tmp_path) and "第一版" not in _page(tmp_path)
-    assert not [n for n in os.listdir(str(tmp_path)) if n.startswith(".")]
+    assert not _dot_entries(tmp_path) and not _dot_entries(tmp_path / "2026-11-13")
+
+
+def test_failed_replace_keeps_old_issue(tmp_path, settings, monkeypatch):
+    """index.html 的 os.replace 失败 → 旧页面仍完整可读；下一次 render 后不留临时文件。"""
+    render_issue(DAY, [_ev("第一版")], [], settings, str(tmp_path))
+    before = _page(tmp_path)
+    real = os.replace
+
+    def flaky(src, dst):
+        if str(dst).endswith(os.path.join("2026-11-13", "index.html")):
+            raise OSError("replace failed")
+        real(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    with pytest.raises(OSError):
+        render_issue(DAY, [_ev("第二版")], [], settings, str(tmp_path))
+    assert _page(tmp_path) == before
+    assert sorted(os.listdir(str(tmp_path))) == ["2026-11-13", "assets"]
+    monkeypatch.setattr(os, "replace", real)
+    render_issue(DAY, [_ev("第二版")], [], settings, str(tmp_path))
+    assert "第二版" in _page(tmp_path)
+    assert not _dot_entries(tmp_path) and not _dot_entries(tmp_path / "2026-11-13")
+
+
+def test_stale_temp_entries_swept(tmp_path, settings, store):
+    render_issue(DAY, [_ev()], [], settings, str(tmp_path))
+    (tmp_path / ".old-x").mkdir()
+    (tmp_path / ".old-x" / "index.html").write_text("old", encoding="utf-8")
+    (tmp_path / ".tmp-y").mkdir()
+    (tmp_path / ".tmp-z").write_text("half", encoding="utf-8")
+    (tmp_path / "2026-11-13" / ".tmp-w").write_text("half", encoding="utf-8")
+    render_issue(DAY, [_ev()], [], settings, str(tmp_path))
+    assert not _dot_entries(tmp_path) and not _dot_entries(tmp_path / "2026-11-13")
+    (tmp_path / ".tmp-v").mkdir()
+    render_index(store, str(tmp_path))
+    assert not _dot_entries(tmp_path)
 
 
 def test_published_permissions(tmp_path, settings, store):

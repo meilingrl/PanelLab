@@ -1,14 +1,13 @@
 """静态网站生成：每期页面、首页（跳到最新一期）、往期归档、带内容哈希的 CSS/JS。
 
-所有外来文本 html.escape；链接只输出 http/https。每期先写到 site/.tmp-<随机>/ 再整体换到位，
-index.html / archive.html 先写临时文件再 os.replace，读者任何时刻看到的都是完整页面。
+所有外来文本 html.escape；链接只输出 http/https。每个页面文件（期内 index.html、issue.json，
+以及 site/index.html、archive.html）都先写同目录临时文件再 os.replace，读者任何时刻看到的都是完整页面。
 目录 0755、文件 0644，nginx 可读。
 """
 import hashlib
 import json
 import os
 import re
-import secrets
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass
@@ -277,28 +276,41 @@ def _issue_json(issue_date: date, events: List[EventOut], hidden: List[HiddenIte
     return json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8")
 
 
+def _sweep(path: str) -> None:
+    """删除 path 下直接的 .tmp-* / .old-* 残留（上次中断留下的临时文件或目录）。"""
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return
+    for n in names:
+        if not n.startswith((".tmp-", ".old-")):
+            continue
+        p = os.path.join(path, n)
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p, ignore_errors=True)
+        else:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
 def render_issue(issue_date: date, events: List[EventOut], hidden: List[HiddenItem], settings,
                  site_dir: str) -> None:
-    """生成 site/<YYYY-MM-DD>/index.html 与 issue.json，整期原子替换。"""
+    """生成 site/<YYYY-MM-DD>/index.html 与 issue.json。
+
+    每个文件先写到同目录的临时文件再 os.replace 到位：读者任何时刻读到的都是某一版完整的文件，
+    期目录本身一直存在。
+    """
     _ensure_dir(site_dir)
+    _sweep(site_dir)
+    target = os.path.join(site_dir, issue_date.isoformat())
+    _ensure_dir(target)
+    _sweep(target)
     assets = _publish_assets(site_dir)
     html = _issue_html(issue_date, events, hidden, settings, site_dir, assets)
-    target = os.path.join(site_dir, issue_date.isoformat())
-    tmp = tempfile.mkdtemp(prefix=".tmp-", dir=site_dir)
-    try:
-        os.chmod(tmp, DIR_MODE)
-        _write_file(os.path.join(tmp, "index.html"), html)
-        _write_file(os.path.join(tmp, "issue.json"), _issue_json(issue_date, events, hidden))
-        old = None
-        if os.path.exists(target):
-            old = os.path.join(site_dir, ".old-" + secrets.token_hex(6))
-            os.replace(target, old)
-        os.replace(tmp, target)
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
-    if old is not None:
-        shutil.rmtree(old, ignore_errors=True)
+    _replace_file(os.path.join(target, "issue.json"), _issue_json(issue_date, events, hidden))
+    _replace_file(os.path.join(target, "index.html"), html)
 
 
 # ---------- 首页与归档 ----------
@@ -306,6 +318,7 @@ def render_issue(issue_date: date, events: List[EventOut], hidden: List[HiddenIt
 def render_index(store, site_dir: str) -> None:
     """site/index.html 跳到最新一期（ok|degraded）；site/archive.html 按月列出各期。"""
     _ensure_dir(site_dir)
+    _sweep(site_dir)
     assets = _publish_assets(site_dir)
     issues = [r for r in store.list_issues() if r.status in PUBLISHED and _issue_date(r.date)]
 
