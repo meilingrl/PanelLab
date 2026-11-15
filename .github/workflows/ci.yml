@@ -25,7 +25,8 @@ jobs:
         run: python -m pytest scripts/tests/ -v --tb=short
 
   agent:
-    runs-on: ubuntu-latest
+    # Python 3.9 builds exist for Ubuntu 22.04/24.04 only; ubuntu-latest (26.04) has none.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +41,8 @@ jobs:
           cd agent && python -m pytest -q
 
   dailynews:
-    runs-on: ubuntu-latest
+    # Python 3.9 builds exist for Ubuntu 22.04/24.04 only; ubuntu-latest (26.04) has none.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
