@@ -190,9 +190,11 @@ def test_security_modes_pick_smtplib_branch(tmp_path, monkeypatch, security, cls
 
 def test_cli_requires_smtp_config(tmp_path, capsys):
     p, s = _settings(tmp_path, 25)
-    raw = json.loads(open(p, encoding="utf-8").read())
+    with open(p, encoding="utf-8") as f:
+        raw = json.load(f)
     raw["smtp"] = {}
-    open(p, "w", encoding="utf-8").write(json.dumps(raw))
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(json.dumps(raw))
     assert cli.main(["--settings", p, "notify", "--now", "2026-11-13T07:30:00+08:00"]) == 2
     assert "smtp" in capsys.readouterr().out.lower()
 

@@ -575,3 +575,64 @@ def test_output_never_contains_api_key(tmp_path, http_server, no_politeness, mon
                 continue
             with open(os.path.join(root, name), "rb") as f:
                 assert SECRET.encode() not in f.read(), name
+
+
+# ------------------------------------------------------------- 进度输出
+
+def test_progress_reports_each_stage_once_in_order(env):
+    settings, store, _ = env
+    seen = []
+    res = pipeline.run_build(settings, store, fake_llm(), DAY1, progress=seen.append)
+    assert res.exit_code == 0
+    assert seen == ["开始：采集", "开始：归并", "开始：跨天比对", "开始：分类", "开始：合并",
+                    "开始：抓取原文", "开始：摘要", "开始：保存", "开始：发布", "开始：清理"]
+    assert pipeline.current_stage() == "完成"
+
+
+def test_progress_stops_at_the_failing_stage(env, monkeypatch):
+    settings, store, _ = env
+    seen = []
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(pipeline.summarize, "summarize", boom)
+    res = pipeline.run_build(settings, store, fake_llm(), DAY1, progress=seen.append)
+    assert res.exit_code == 1
+    assert seen[-1] == "开始：摘要"
+
+
+def test_cli_build_prints_timestamped_progress_before_summary(tmp_path, http_server, no_politeness,
+                                                              monkeypatch, capsys):
+    serve(http_server, BBC_DAY1, GD_DAY1)
+    path = write_settings(tmp_path, two_sources(http_server))
+    monkeypatch.setenv("DAILYNEWS_LLM_API_KEY", SECRET)
+    monkeypatch.setattr(cli, "_make_llm", lambda *a, **k: fake_llm())
+    code = cli.main(["--settings", path, "build", "--now", DAY1.isoformat()])
+    out = capsys.readouterr().out.splitlines()
+    assert code == 0
+    progress = [l for l in out if "开始：" in l]
+    assert re.match(r"^\[\d\d:\d\d:\d\d\] 开始：采集$", progress[0])
+    assert out.index(progress[-1]) < out.index("期号 2026-11-13")
+
+
+def test_sigterm_message_names_the_stage(monkeypatch, capfd):
+    monkeypatch.setattr(pipeline, "_CURRENT_STAGE", "摘要")
+    with pytest.raises(SystemExit) as exc:
+        cli._on_sigterm(15, None)
+    assert exc.value.code == 143
+    assert "构建被终止（阶段：摘要）" in capfd.readouterr().out
+
+
+def test_termination_closes_the_builds_row(env, monkeypatch):
+    settings, store, _ = env
+
+    def stopped(*a, **k):
+        raise SystemExit(143)
+
+    monkeypatch.setattr(pipeline.summarize, "summarize", stopped)
+    with pytest.raises(SystemExit):
+        pipeline.run_build(settings, store, fake_llm(), DAY1)
+    row = store.conn.execute("select status, ended_at, note from builds order by id desc limit 1").fetchone()
+    assert row[0] == "failed" and row[1] is not None
+    assert "构建被终止（阶段：摘要）" in row[2]
