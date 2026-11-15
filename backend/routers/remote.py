@@ -74,6 +74,16 @@ def files(server_id: int, db: DB, user: Owner, path: str | None = None):
             return list_directory(sftp, path)
 
 
+@router.get('/servers/{server_id}/shell-history')
+def shell_history(server_id: int, db: DB, user: Owner):
+    from services import remote_files
+    from services.shell_history import read_shell_history
+    with connection.open_remote(db, user, server_id) as client:
+        with remote_files.open_sftp(client) as sftp:
+            result = read_shell_history(sftp)
+    return {**result, 'observed_at': connection.observed_at()}
+
+
 @router.post('/servers/{server_id}/terminal-ticket')
 def terminal_ticket(server_id: int, body: TerminalTicketRequest, db: DB, user: Owner):
     from services.remote_tickets import issue_ticket

@@ -58,53 +58,101 @@
           />
         </div>
         <aside class="terminal-history-sidebar" aria-label="终端指令侧栏">
-          <div class="terminal-history-header">
-            <h3 class="terminal-history-title">常用指令</h3>
+          <div class="terminal-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              class="terminal-tab"
+              :class="{ active: sideTab === 'recent' }"
+              :aria-selected="sideTab === 'recent'"
+              @click="sideTab = 'recent'"
+            >最近</button>
+            <button
+              type="button"
+              role="tab"
+              class="terminal-tab"
+              :class="{ active: sideTab === 'quick' }"
+              :aria-selected="sideTab === 'quick'"
+              @click="sideTab = 'quick'"
+            >常用</button>
           </div>
-          <ul class="terminal-history-list terminal-quick-list">
+          <template v-if="sideTab === 'recent'">
+            <div class="terminal-history-tools">
+              <input
+                v-model="historyQuery"
+                type="search"
+                class="terminal-history-search"
+                placeholder="搜索命令"
+                aria-label="搜索命令"
+              />
+              <button
+                type="button"
+                class="btn-clear-history"
+                :disabled="!currentServerId || serverHistoryLoading"
+                title="重新读取服务器上的 shell 历史"
+                @click="loadServerHistory"
+              >刷新</button>
+              <button
+                type="button"
+                class="btn-clear-history"
+                :disabled="localHistory.length === 0"
+                title="清空本浏览器为这台服务器记录的命令（不影响服务器上的历史）"
+                @click="clearLocalHistory"
+              >清空</button>
+            </div>
+            <p v-if="serverHistoryNote" class="terminal-history-note">{{ serverHistoryNote }}</p>
+            <ul class="terminal-history-list">
+              <li v-for="item in historyItems" :key="item.cmd" class="terminal-history-row">
+                <button
+                  type="button"
+                  class="terminal-history-item"
+                  :title="'填入：' + item.cmd"
+                  @click="fillCommand(item.cmd)"
+                >{{ item.cmd }}</button>
+                <button
+                  type="button"
+                  class="terminal-row-btn"
+                  :class="{ pinned: item.pinned }"
+                  :title="item.pinned ? '取消固定' : '固定到顶部'"
+                  :aria-label="(item.pinned ? '取消固定 ' : '固定 ') + item.cmd"
+                  @click="togglePinned(item.cmd)"
+                >{{ item.pinned ? '★' : '☆' }}</button>
+                <button
+                  type="button"
+                  class="terminal-row-btn"
+                  title="立即运行"
+                  :aria-label="'运行 ' + item.cmd"
+                  @click="runCommand(item.cmd)"
+                >▶</button>
+              </li>
+              <li v-if="historyItems.length === 0" class="terminal-history-empty">
+                {{ historyQuery ? '没有匹配的命令' : '暂无历史指令' }}
+              </li>
+            </ul>
+            <p class="terminal-history-hint">点击填入命令行，▶ 直接运行，☆ 固定到顶部</p>
+          </template>
+          <ul v-else class="terminal-history-list terminal-quick-list">
             <li
               v-for="(group, gIndex) in builtinCommandGroups"
               :key="gIndex"
               class="terminal-quick-group"
             >
               <div class="terminal-quick-group-title">{{ group.name }}</div>
-              <button
-                v-for="(item, index) in group.commands"
-                :key="index"
-                type="button"
-                class="terminal-history-item"
-                :title="item.cmd"
-                @click="sendBuiltinCommand(item.cmd)"
-              >
-                {{ item.label || item.cmd }}
-              </button>
-            </li>
-          </ul>
-          <div class="terminal-history-header terminal-history-header--compact">
-            <h3 class="terminal-history-title">历史指令</h3>
-            <button
-              type="button"
-              class="btn-clear-history"
-              :disabled="commandHistory.length === 0"
-              @click="clearHistory"
-              title="清空历史"
-            >
-              清空
-            </button>
-          </div>
-          <ul class="terminal-history-list">
-            <li v-for="(cmd, index) in commandHistory" :key="index">
-              <button
-                type="button"
-                class="terminal-history-item"
-                :title="cmd"
-                @click="sendHistoryCommand(cmd)"
-              >
-                {{ cmd }}
-              </button>
-            </li>
-            <li v-if="commandHistory.length === 0" class="terminal-history-empty">
-              暂无历史指令
+              <div v-for="(item, index) in group.commands" :key="index" class="terminal-history-row">
+                <button
+                  type="button"
+                  class="terminal-history-item"
+                  :title="'填入：' + item.cmd"
+                  @click="fillCommand(item.cmd)"
+                >{{ item.label || item.cmd }}</button>
+                <button
+                  type="button"
+                  class="terminal-row-btn"
+                  title="立即运行"
+                  :aria-label="'运行 ' + item.cmd"
+                  @click="runCommand(item.cmd)"
+                >▶</button>
+              </div>
             </li>
           </ul>
         </aside>
@@ -138,25 +186,38 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useTerminalStore } from '../../composables/useTerminalStore'
-
-const HISTORY_KEY = 'panel_terminal_command_history'
-const HISTORY_MAX = 500
-const CMD_MAX_LEN = 512
+import {
+  clearLocal, createLineTracker, fillSequence, loadLocal, loadPins, mergeHistory,
+  recordLocal, togglePin,
+} from '../../composables/commandHistory'
 
 const store = useTerminalStore()
 const terminalRef = ref(null)
 const serverList = ref([])
 const showServerPicker = ref(false)
-const commandHistory = ref([])
+const sideTab = ref('recent')
+const historyQuery = ref('')
+const localHistory = ref([])
+const serverHistory = ref([])
+const pins = ref([])
+const serverHistoryLoading = ref(false)
+const serverHistoryNote = ref('')
+const lineTracker = createLineTracker()
 
 let term = null
 let fitAddon = null
 let resizeObserver = null
-let lineBuffer = ''
 
 const sessionList = computed(() => store.sessions.value)
 const currentId = computed(() => store.currentSessionId.value)
 const currentSession = computed(() => store.currentSession.value)
+const currentServerId = computed(() => currentSession.value?.serverId || null)
+const historyItems = computed(() => mergeHistory({
+  local: localHistory.value,
+  server: serverHistory.value,
+  pins: pins.value,
+  query: historyQuery.value,
+}))
 
 const builtinCommandGroups = [
   { name: '系统', commands: [
@@ -181,52 +242,74 @@ const builtinCommandGroups = [
   ]},
 ]
 
-function loadHistory() {
+function loadHistoryFor(serverId) {
+  localHistory.value = loadLocal(serverId)
+  pins.value = loadPins(serverId)
+  serverHistory.value = []
+  serverHistoryNote.value = ''
+}
+
+async function loadServerHistory() {
+  const serverId = currentServerId.value
+  if (!serverId) return
+  serverHistoryLoading.value = true
   try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    commandHistory.value = raw ? (JSON.parse(raw) || []) : []
+    const res = await fetch(`/api/servers/${serverId}/shell-history`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('panel_token')}` },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (serverId !== currentServerId.value) return
+    if (!res.ok) {
+      serverHistory.value = []
+      serverHistoryNote.value = '读取服务器历史失败：' + (data?.detail?.message || res.status)
+      return
+    }
+    serverHistory.value = Array.isArray(data.commands) ? data.commands : []
+    serverHistoryNote.value = (data.sources || []).length ? '' : '服务器上没有可读的 shell 历史'
   } catch {
-    commandHistory.value = []
+    if (serverId === currentServerId.value) serverHistoryNote.value = '读取服务器历史失败'
+  } finally {
+    serverHistoryLoading.value = false
   }
 }
 
-function saveHistory() {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(commandHistory.value))
-  } catch {}
+function recordCommand(cmd) {
+  localHistory.value = recordLocal(currentServerId.value, localHistory.value, cmd)
 }
 
-function pushCommandToHistory(cmd) {
-  const trimmed = (cmd || '').trim()
-  if (!trimmed) return
-  const s = trimmed.length > CMD_MAX_LEN ? trimmed.slice(0, CMD_MAX_LEN) : trimmed
-  const list = commandHistory.value
-  const idx = list.indexOf(s)
-  if (idx !== -1) {
-    commandHistory.value = [s, ...list.slice(0, idx), ...list.slice(idx + 1)]
+function clearLocalHistory() {
+  localHistory.value = clearLocal(currentServerId.value)
+}
+
+function togglePinned(cmd) {
+  pins.value = togglePin(currentServerId.value, pins.value, cmd)
+}
+
+function sendCommand(cmd, run) {
+  const s = (cmd || '').trim()
+  if (!s || !currentSession.value || currentSession.value.status !== 'connected') return
+  store.sendToSession(store.currentSessionId.value, fillSequence(s, run))
+  if (run) {
+    lineTracker.set('')
+    recordCommand(s)
   } else {
-    commandHistory.value = [s, ...list].slice(0, HISTORY_MAX)
+    lineTracker.set(s)
+    term?.focus()
   }
-  saveHistory()
 }
 
-function clearHistory() {
-  commandHistory.value = []
-  localStorage.removeItem(HISTORY_KEY)
+function fillCommand(cmd) {
+  sendCommand(cmd, false)
 }
 
-function sendHistoryCommand(cmd) {
-  const s = (cmd || '').trim()
-  if (!s || !currentSession.value || currentSession.value.status !== 'connected') return
-  store.sendToSession(store.currentSessionId.value, `${s}\r`)
+function runCommand(cmd) {
+  sendCommand(cmd, true)
 }
 
-function sendBuiltinCommand(cmd) {
-  const s = (cmd || '').trim()
-  if (!s || !currentSession.value || currentSession.value.status !== 'connected') return
-  store.sendToSession(store.currentSessionId.value, `${s}\r`)
-  pushCommandToHistory(s)
-}
+watch(currentServerId, (serverId) => {
+  loadHistoryFor(serverId)
+  if (serverId) loadServerHistory()
+}, { immediate: true })
 
 function statusTitle(status) {
   const t = { connecting: '连接中', connected: '已连接', disconnected: '已断开', error: '错误' }
@@ -288,7 +371,6 @@ function refreshTerminalView() {
 }
 
 onMounted(async () => {
-  loadHistory()
   await loadServers()
 
   if (store.sessions.value.length === 0 && serverList.value.length > 0) {
@@ -335,19 +417,7 @@ onMounted(async () => {
   }
 
   term.onData((data) => {
-    if (data.includes('\r') || data.includes('\n')) {
-      const full = lineBuffer + data
-      const parts = full.split(/\r\n|\r|\n/)
-      for (let i = 0; i < parts.length - 1; i++) pushCommandToHistory(parts[i])
-      lineBuffer = parts[parts.length - 1] ?? ''
-    } else if (data === '\x7f') {
-      lineBuffer = lineBuffer.slice(0, -1)
-    } else {
-      for (let i = 0; i < data.length; i++) {
-        const c = data[i]
-        if (c >= ' ' || c === '\t') lineBuffer += c
-      }
-    }
+    lineTracker.feed(data).forEach(recordCommand)
     const sid = store.currentSessionId.value
     if (sid && currentSession.value?.status === 'connected') {
       store.sendToSession(sid, data)
@@ -662,9 +732,95 @@ onBeforeUnmount(() => {
   list-style: none;
 }
 
-.terminal-quick-list {
+.terminal-tabs {
+  display: flex;
   border-bottom: 1px solid var(--border);
-  flex: 0 0 auto;
+  flex-shrink: 0;
+}
+
+.terminal-tab {
+  flex: 1;
+  padding: 0.6rem 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.terminal-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent, #1864ab);
+}
+
+.terminal-history-tools {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.terminal-history-search {
+  flex: 1;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  background: var(--bg-primary, transparent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.terminal-history-note,
+.terminal-history-hint {
+  margin: 0;
+  padding: 0.4rem 1rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.terminal-history-hint {
+  border-top: 1px solid var(--border);
+}
+
+.terminal-history-row {
+  display: flex;
+  align-items: center;
+}
+
+.terminal-history-row .terminal-history-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.terminal-row-btn {
+  flex-shrink: 0;
+  width: 1.9rem;
+  padding: 0.4rem 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.terminal-history-row:hover .terminal-row-btn,
+.terminal-row-btn:focus-visible,
+.terminal-row-btn.pinned {
+  opacity: 1;
+}
+
+.terminal-row-btn:hover {
+  color: var(--text-primary);
+}
+
+.terminal-row-btn.pinned {
+  color: #c08a00;
 }
 
 .terminal-quick-group {
