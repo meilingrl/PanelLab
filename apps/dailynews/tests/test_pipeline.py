@@ -616,9 +616,23 @@ def test_cli_build_prints_timestamped_progress_before_summary(tmp_path, http_ser
     assert out.index(progress[-1]) < out.index("期号 2026-11-13")
 
 
-def test_sigterm_message_names_the_stage(monkeypatch, capsys):
+def test_sigterm_message_names_the_stage(monkeypatch, capfd):
     monkeypatch.setattr(pipeline, "_CURRENT_STAGE", "摘要")
     with pytest.raises(SystemExit) as exc:
         cli._on_sigterm(15, None)
     assert exc.value.code == 143
-    assert "构建被终止（阶段：摘要）" in capsys.readouterr().out
+    assert "构建被终止（阶段：摘要）" in capfd.readouterr().out
+
+
+def test_termination_closes_the_builds_row(env, monkeypatch):
+    settings, store, _ = env
+
+    def stopped(*a, **k):
+        raise SystemExit(143)
+
+    monkeypatch.setattr(pipeline.summarize, "summarize", stopped)
+    with pytest.raises(SystemExit):
+        pipeline.run_build(settings, store, fake_llm(), DAY1)
+    row = store.conn.execute("select status, ended_at, note from builds order by id desc limit 1").fetchone()
+    assert row[0] == "failed" and row[1] is not None
+    assert "构建被终止（阶段：摘要）" in row[2]

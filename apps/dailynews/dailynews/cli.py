@@ -77,7 +77,13 @@ def _progress(line):
 
 def _on_sigterm(signum, frame):
     from .pipeline import current_stage
-    print("构建被终止（阶段：%s）。多半是作业超时：在 Agent 页面调大这个作业的超时。" % current_stage(), flush=True)
+    msg = "构建被终止（阶段：%s）。多半是作业超时：在 Agent 页面调大这个作业的超时。\n" % current_stage()
+    # os.write, not print: the signal may arrive while print() is writing a progress line.
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    os.write(1, msg.encode("utf-8"))
     sys.exit(143)
 
 
@@ -95,7 +101,6 @@ def _build(args):
     from .pipeline import run_build
     from .store import Store
     now = args.now or datetime.now().astimezone()
-    stage = "准备"
     store = None
     previous = signal.signal(signal.SIGTERM, _on_sigterm)
     try:
@@ -104,7 +109,8 @@ def _build(args):
         llm = _make_llm(s, api_key, store, now.astimezone(ZoneInfo(s.timezone)).date())
         result = run_build(s, store, llm, now, progress=_progress)
     except Exception as e:  # 只报阶段和异常类型，异常文字可能含路径或密钥
-        print("构建失败（阶段：%s）：%s" % (stage, type(e).__name__))
+        from .pipeline import current_stage
+        print("构建失败（阶段：%s）：%s" % (current_stage(), type(e).__name__))
         return 1
     finally:
         signal.signal(signal.SIGTERM, previous)

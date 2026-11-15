@@ -317,6 +317,10 @@ def run_build(settings: Settings, store: Store, llm, now: datetime, progress=Non
             warnings.append("上一期页面更新失败：%s" % type(e).__name__)
         stage("清理", store.prune, now)
         enter("完成")
+    except (SystemExit, KeyboardInterrupt):
+        # Stopped (e.g. the Agent's timeout sent SIGTERM): close the builds row, then stop.
+        _finish(store, build_id, "failed", "构建被终止（阶段：%s）" % _CURRENT_STAGE)
+        raise
     except _StageError as e:
         msg = "构建失败（阶段：%s）：%s" % (e.stage, type(e.exc).__name__)
         _finish(store, build_id, "failed", msg)
