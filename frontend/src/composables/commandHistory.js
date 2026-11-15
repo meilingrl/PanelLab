@@ -12,10 +12,9 @@ export const SECRET_PATTERN = new RegExp([
   'passw|passphrase|secret|token|api[_-]?key|authorization|bearer|credential|private[_-]?key|cookie|sshpass',
   '\\b\\w*(?:pass|pwd)\\w*=',
   '://[^\\s/:@]+:[^\\s/@]+@',
-  '\\s-u\\s*\\S+:\\S',
-  '\\bsudo\\s+(?:-\\w+\\s+)*-S\\b',
+  '\\b(?:curl|wget)\\b.*\\s-u\\s*\\S+:\\S',
   '\\b(?:mysql|mariadb|mysqldump|mysqladmin|mongo\\w*)\\b.*\\s-p\\S',
-  '\\bdocker\\s+login\\b.*\\s(?:-p|--password)\\b',
+  '\\bdocker\\s+login\\b.*\\s(?:-p|--password(?!-stdin))\\b',
   '\\bredis-cli\\b.*\\s-a\\s',
   '\\bsmbclient\\b.*%',
   '\\b(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|sk-)[A-Za-z0-9_-]{8,}',
@@ -25,8 +24,11 @@ export const SECRET_PATTERN = new RegExp([
 // Replies to prompts (y/n, a single key) are not commands worth keeping.
 const PROMPT_ANSWER = /^(?:.|y|n|yes|no|q)$/i
 
+// Case-sensitive: `sudo -S` reads a password from stdin, `sudo -s` is a shell.
+const SUDO_STDIN = /\bsudo\s+(?:-\w+\s+)*-S\b/
+
 export function looksSecret(cmd) {
-  return SECRET_PATTERN.test(cmd)
+  return SECRET_PATTERN.test(cmd) || SUDO_STDIN.test(cmd)
 }
 
 function readList(key) {

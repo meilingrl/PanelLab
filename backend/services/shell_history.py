@@ -23,10 +23,10 @@ LOOKS_SECRET = re.compile(
     r'passw|passphrase|secret|token|api[_-]?key|authorization|bearer|credential|private[_-]?key|cookie|sshpass'
     r'|\b\w*(?:pass|pwd)\w*='                       # DB_PASS=…, MYSQL_PWD=…
     r'|://[^\s/:@]+:[^\s/@]+@'                       # https://user:pw@host
-    r'|\s-u\s*\S+:\S'                               # curl -u user:pw
-    r'|\bsudo\s+(?:-\w+\s+)*-S\b'                   # echo pw | sudo -S
+    r'|\b(?:curl|wget)\b.*\s-u\s*\S+:\S'            # curl -u user:pw (not docker -u 1000:1000)
+    r'|\bsudo\s+(?:-\w+\s+)*(?-i:-S)\b'             # echo pw | sudo -S (not sudo -s)
     r'|\b(?:mysql|mariadb|mysqldump|mysqladmin|mongo\w*)\b.*\s-p\S'  # mysql -pSECRET
-    r'|\bdocker\s+login\b.*\s(?:-p|--password)\b'
+    r'|\bdocker\s+login\b.*\s(?:-p|--password(?!-stdin))\b'
     r'|\bredis-cli\b.*\s-a\s'
     r'|\bsmbclient\b.*%'
     r'|\b(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|sk-)[A-Za-z0-9_-]{8,}'

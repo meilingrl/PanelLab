@@ -316,7 +316,7 @@ function screenLinesFrom(from) {
   return lines
 }
 
-const PROMPT_LIKE = /[$#%>]\s*$|[$#%>]\s/
+const PROMPT_LIKE = /[$#%>➜❯»λ]\s*$|[$#%>➜❯»λ]\s/
 const CONFIRM_MS = 5000
 let pendingConfirm = null
 

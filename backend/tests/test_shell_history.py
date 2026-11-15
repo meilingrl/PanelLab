@@ -131,6 +131,7 @@ def test_more_secret_shapes_are_dropped(line):
 @pytest.mark.parametrize('line', [
     'netstat -plnt', 'ss -plnt', 'find . -path x -print', 'cp -pr a b', 'mkdir -pv d', 'grep -Pi x f',
     'rsync -Pav a b', 'docker run -p8080:80 img', 'ssh -p 22 host', 'git push', 'mkdir -p dir',
+    'sudo -s', 'docker run -u 1000:1000 img', 'docker exec -u root:root c sh',
 ])
 def test_common_commands_are_kept(line):
     assert read({'.bash_history': (line + '\n').encode()})['commands'] == [line]

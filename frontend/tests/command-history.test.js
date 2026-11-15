@@ -102,10 +102,12 @@ it('fill clears the line first and runs only when asked', () => {
 describe('secrets and prompts', () => {
   it('matches the backend secret shapes and keeps common commands', () => {
     for (const s of ['docker login -u me -p hunter2', 'curl -u me:pw https://x', 'export DB_PASS=abc',
-      'mysql -u root -pS3cret', 'echo ghp_abcdefghijklmnop', 'git clone https://me:tok@github.com/a/b']) {
+      'mysql -u root -pS3cret', 'echo ghp_abcdefghijklmnop', 'git clone https://me:tok@github.com/a/b',
+      'echo pw | sudo -S ls', 'wget -u me:pw http://x']) {
       expect(looksSecret(s), s).toBe(true)
     }
-    for (const s of ['netstat -plnt', 'mkdir -p dir', 'ssh -p 22 host', 'rsync -Pav a b', 'git push']) {
+    for (const s of ['netstat -plnt', 'mkdir -p dir', 'ssh -p 22 host', 'rsync -Pav a b', 'git push',
+      'sudo -s', 'docker run -u 1000:1000 img']) {
       expect(looksSecret(s), s).toBe(false)
     }
   })
