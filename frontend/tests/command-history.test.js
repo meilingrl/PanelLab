@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  clearLocal, createLineTracker, fillSequence, loadLocal, loadPins, mergeHistory,
-  recordLocal, togglePin, LOCAL_MAX,
+  clearLocal, createLineTracker, fillSequence, loadLocal, loadPins, looksSecret, mergeHistory,
+  recordLocal, shouldRecord, togglePin, LOCAL_MAX,
 } from '../src/composables/commandHistory'
 
 beforeEach(() => {
@@ -95,6 +95,44 @@ describe('line tracker', () => {
 })
 
 it('fill clears the line first and runs only when asked', () => {
-  expect(fillSequence('ls')).toBe('\x15ls')
-  expect(fillSequence('ls', true)).toBe('\x15ls\r')
+  expect(fillSequence('ls')).toBe('\x05\x15ls')
+  expect(fillSequence('ls', true)).toBe('\x05\x15ls\r')
+})
+
+describe('secrets and prompts', () => {
+  it('matches the backend secret shapes and keeps common commands', () => {
+    for (const s of ['docker login -u me -p hunter2', 'curl -u me:pw https://x', 'export DB_PASS=abc',
+      'mysql -u root -pS3cret', 'echo ghp_abcdefghijklmnop', 'git clone https://me:tok@github.com/a/b']) {
+      expect(looksSecret(s), s).toBe(true)
+    }
+    for (const s of ['netstat -plnt', 'mkdir -p dir', 'ssh -p 22 host', 'rsync -Pav a b', 'git push']) {
+      expect(looksSecret(s), s).toBe(false)
+    }
+  })
+
+  it('never stores secret-looking lines or prompt answers', () => {
+    let list = recordLocal(1, [], 'export API_KEY=abc')
+    list = recordLocal(1, list, 'y')
+    list = recordLocal(1, list, 'ls')
+    expect(list).toEqual(['ls'])
+  })
+
+  it('hides old secret entries already in storage', () => {
+    const items = mergeHistory({ local: ['echo token=x', 'ls'] })
+    expect(items.map((i) => i.cmd)).toEqual(['ls'])
+  })
+
+  it('records only echoed lines outside password prompts and full-screen programs', () => {
+    expect(shouldRecord('ls -la', ['admin@host:~$ ls -la', 'total 0'], false)).toBe(true)
+    expect(shouldRecord('sudo -k', ['admin@host:~$ uname -r', '6.8.0', 'admin@host:~$ sudo -k'], false)).toBe(true)
+    expect(shouldRecord('hunter2', ['[sudo] password for admin: '], false)).toBe(false)
+    expect(shouldRecord('hunter2', ['admin@host:~$ '], false)).toBe(false)
+    expect(shouldRecord(':wq', [':wq'], true)).toBe(false)
+    expect(shouldRecord('x', ['Enter passphrase for key: x'], false)).toBe(false)
+  })
+
+  it('records pasted commands despite bracketed-paste markers', () => {
+    const t = createLineTracker()
+    expect(t.feed('\x1b[200~df -h\x1b[201~\r')).toEqual(['df -h'])
+  })
 })

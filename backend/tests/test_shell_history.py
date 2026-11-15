@@ -116,3 +116,33 @@ def test_endpoint_uses_owned_pinned_connection(monkeypatch):
     assert seen['server_id'] == 7
     assert result['commands'] == ['pwd']
     assert 'observed_at' in result
+
+
+@pytest.mark.parametrize('line', [
+    'docker login -u me -p hunter2', 'curl -u me:pw https://x', 'git clone https://me:ghp_x@github.com/a/b',
+    'export DB_PASS=abc', 'MYSQL_PWD=abc mysql', 'redis-cli -a pw', 'echo ghp_abcdefghijklmnop',
+    'echo sk-abcdefghijklmnopqrst', 'aws AKIAABCDEFGHIJKLMNOP', 'echo pw | sudo -S ls', 'smbclient //h/s -U me%pw',
+    'mysql -u root -pS3cret db',
+])
+def test_more_secret_shapes_are_dropped(line):
+    assert read({'.bash_history': (line + '\n').encode()})['commands'] == []
+
+
+@pytest.mark.parametrize('line', [
+    'netstat -plnt', 'ss -plnt', 'find . -path x -print', 'cp -pr a b', 'mkdir -pv d', 'grep -Pi x f',
+    'rsync -Pav a b', 'docker run -p8080:80 img', 'ssh -p 22 host', 'git push', 'mkdir -p dir',
+])
+def test_common_commands_are_kept(line):
+    assert read({'.bash_history': (line + '\n').encode()})['commands'] == [line]
+
+
+def test_zsh_metafied_chinese_is_restored():
+    text = 'echo 你好'.encode()
+    meta = bytearray()
+    for b in text:
+        if 0x83 <= b <= 0x9f:
+            meta += bytes([0x83, b ^ 0x20])
+        else:
+            meta.append(b)
+    result = read({'.zsh_history': b': 1:0;' + bytes(meta) + b'\n'})
+    assert result['commands'] == ['echo 你好']

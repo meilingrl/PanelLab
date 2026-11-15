@@ -101,6 +101,7 @@
               >清空</button>
             </div>
             <p v-if="serverHistoryNote" class="terminal-history-note">{{ serverHistoryNote }}</p>
+            <p v-if="actionNote" class="terminal-history-note" role="status">{{ actionNote }}</p>
             <ul class="terminal-history-list">
               <li v-for="item in historyItems" :key="item.cmd" class="terminal-history-row">
                 <button
@@ -188,7 +189,7 @@ import '@xterm/xterm/css/xterm.css'
 import { useTerminalStore } from '../../composables/useTerminalStore'
 import {
   clearLocal, createLineTracker, fillSequence, loadLocal, loadPins, mergeHistory,
-  recordLocal, togglePin,
+  recordLocal, shouldRecord, togglePin,
 } from '../../composables/commandHistory'
 
 const store = useTerminalStore()
@@ -202,6 +203,7 @@ const serverHistory = ref([])
 const pins = ref([])
 const serverHistoryLoading = ref(false)
 const serverHistoryNote = ref('')
+const actionNote = ref('')
 const lineTracker = createLineTracker()
 
 let term = null
@@ -285,9 +287,65 @@ function togglePinned(cmd) {
   pins.value = togglePin(currentServerId.value, pins.value, cmd)
 }
 
+function inFullScreenProgram() {
+  return term?.buffer?.active?.type === 'alternate'
+}
+
+const ECHO_WAIT_MS = 400
+
+// Absolute row of the cursor in the normal (shell) buffer. Full-screen
+// programs draw in the alternate buffer and leave this one untouched.
+function cursorRow() {
+  const buf = term?.buffer?.normal
+  return buf ? buf.baseY + buf.cursorY : -1
+}
+
+// Screen lines from row `from` to the cursor, joining the rows of wrapped lines.
+function screenLinesFrom(from) {
+  const buf = term?.buffer?.normal
+  if (!buf || from < 0) return []
+  let start = from
+  while (start > 0 && buf.getLine(start)?.isWrapped) start -= 1
+  const last = cursorRow()
+  const lines = []
+  for (let y = start; y <= last; y++) {
+    const text = buf.getLine(y)?.translateToString(true) || ''
+    if (buf.getLine(y)?.isWrapped && lines.length) lines[lines.length - 1] += text
+    else lines.push(text)
+  }
+  return lines
+}
+
+const PROMPT_LIKE = /[$#%>]\s*$|[$#%>]\s/
+const CONFIRM_MS = 5000
+let pendingConfirm = null
+
+// Whether the cursor line looks like a shell prompt (possibly with typed text).
+function promptVisible() {
+  const buf = term?.buffer?.active
+  if (!buf) return false
+  const line = buf.getLine(buf.baseY + buf.cursorY)?.translateToString(true) || ''
+  return PROMPT_LIKE.test(line)
+}
+
 function sendCommand(cmd, run) {
   const s = (cmd || '').trim()
   if (!s || !currentSession.value || currentSession.value.status !== 'connected') return
+  if (inFullScreenProgram()) {
+    actionNote.value = '请先退出全屏程序（如 vim、top、less）再填入命令'
+    return
+  }
+  // Some programs (top on some systems, prompts inside scripts) draw on the normal
+  // screen; if no shell prompt is visible, ask for a second click before typing.
+  const key = (run ? 'run:' : 'fill:') + s
+  const now = Date.now()
+  if (!promptVisible() && !(pendingConfirm && pendingConfirm.key === key && now - pendingConfirm.at < CONFIRM_MS)) {
+    pendingConfirm = { key, at: now }
+    actionNote.value = '命令行上看不到 shell 提示符，可能有程序正在运行。确认要输入，请在 5 秒内再点一次。'
+    return
+  }
+  pendingConfirm = null
+  actionNote.value = ''
   store.sendToSession(store.currentSessionId.value, fillSequence(s, run))
   if (run) {
     lineTracker.set('')
@@ -417,7 +475,21 @@ onMounted(async () => {
   }
 
   term.onData((data) => {
-    lineTracker.feed(data).forEach(recordCommand)
+    // Decide after the echo has had time to arrive and be drawn: a command the
+    // shell echoed is on its row; a password typed at a hidden prompt is not.
+    const finished = lineTracker.feed(data)
+    if (finished.length) {
+      const row = cursorRow()
+      const fullScreen = inFullScreenProgram()
+      const serverId = currentServerId.value
+      setTimeout(() => {
+        if (serverId !== currentServerId.value) return
+        const lines = screenLinesFrom(row)
+        finished.forEach((cmd) => {
+          if (shouldRecord(cmd, lines, fullScreen)) recordCommand(cmd)
+        })
+      }, ECHO_WAIT_MS)
+    }
     const sid = store.currentSessionId.value
     if (sid && currentSession.value?.status === 'connected') {
       store.sendToSession(sid, data)

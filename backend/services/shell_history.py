@@ -17,8 +17,21 @@ MAX_COMMANDS = 200
 MAX_LINE = 500
 ZSH_EXTENDED = re.compile(r'^: \d+:\d+;(.*)$')
 BASH_TIMESTAMP = re.compile(r'^#\d+$')
+# Lines that may carry a credential are never shown. Kept in sync with
+# SECRET_PATTERN in frontend/src/composables/commandHistory.js.
 LOOKS_SECRET = re.compile(
-    r'passw|secret|token|api[_-]?key|authorization|bearer|sshpass|\s-p\S', re.IGNORECASE)
+    r'passw|passphrase|secret|token|api[_-]?key|authorization|bearer|credential|private[_-]?key|cookie|sshpass'
+    r'|\b\w*(?:pass|pwd)\w*='                       # DB_PASS=…, MYSQL_PWD=…
+    r'|://[^\s/:@]+:[^\s/@]+@'                       # https://user:pw@host
+    r'|\s-u\s*\S+:\S'                               # curl -u user:pw
+    r'|\bsudo\s+(?:-\w+\s+)*-S\b'                   # echo pw | sudo -S
+    r'|\b(?:mysql|mariadb|mysqldump|mysqladmin|mongo\w*)\b.*\s-p\S'  # mysql -pSECRET
+    r'|\bdocker\s+login\b.*\s(?:-p|--password)\b'
+    r'|\bredis-cli\b.*\s-a\s'
+    r'|\bsmbclient\b.*%'
+    r'|\b(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|sk-)[A-Za-z0-9_-]{8,}'
+    r'|\bAKIA[0-9A-Z]{16}\b',
+    re.IGNORECASE)
 
 
 def _read_tail(sftp, path):
@@ -38,6 +51,21 @@ def _usable(line):
     if any(ord(c) < 32 and c != '\t' or ord(c) == 127 for c in line):
         return False
     return not LOOKS_SECRET.search(line)
+
+
+def _unmetafy(data):
+    """zsh stores bytes 0x83-0x9f as 0x83 followed by (byte ^ 0x20)."""
+    if b'\x83' not in data:
+        return data
+    out, i = bytearray(), 0
+    while i < len(data):
+        if data[i] == 0x83 and i + 1 < len(data):
+            out.append(data[i + 1] ^ 0x20)
+            i += 2
+        else:
+            out.append(data[i])
+            i += 1
+    return bytes(out)
 
 
 def _commands(data):
@@ -67,7 +95,7 @@ def read_shell_history(sftp):
             continue  # missing, a symlink, or unreadable: skip that file
         sources.append(name)
         truncated = truncated or cut
-        ordered.extend(_commands(data))
+        ordered.extend(_commands(_unmetafy(data) if name == '.zsh_history' else data))
     commands, seen = [], set()
     for line in reversed(ordered):
         if line in seen:

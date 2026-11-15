@@ -6,6 +6,29 @@ export const CMD_MAX_LEN = 512
 const LOCAL_PREFIX = 'panel_terminal_history:'
 const PINS_PREFIX = 'panel_terminal_pins:'
 
+// Lines that may carry a credential are never stored or shown. Kept in sync
+// with LOOKS_SECRET in backend/services/shell_history.py.
+export const SECRET_PATTERN = new RegExp([
+  'passw|passphrase|secret|token|api[_-]?key|authorization|bearer|credential|private[_-]?key|cookie|sshpass',
+  '\\b\\w*(?:pass|pwd)\\w*=',
+  '://[^\\s/:@]+:[^\\s/@]+@',
+  '\\s-u\\s*\\S+:\\S',
+  '\\bsudo\\s+(?:-\\w+\\s+)*-S\\b',
+  '\\b(?:mysql|mariadb|mysqldump|mysqladmin|mongo\\w*)\\b.*\\s-p\\S',
+  '\\bdocker\\s+login\\b.*\\s(?:-p|--password)\\b',
+  '\\bredis-cli\\b.*\\s-a\\s',
+  '\\bsmbclient\\b.*%',
+  '\\b(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|sk-)[A-Za-z0-9_-]{8,}',
+  '\\bAKIA[0-9A-Z]{16}\\b',
+].join('|'), 'i')
+
+// Replies to prompts (y/n, a single key) are not commands worth keeping.
+const PROMPT_ANSWER = /^(?:.|y|n|yes|no|q)$/i
+
+export function looksSecret(cmd) {
+  return SECRET_PATTERN.test(cmd)
+}
+
 function readList(key) {
   try {
     const value = JSON.parse(localStorage.getItem(key) || '[]')
@@ -38,7 +61,7 @@ export function normalizeCommand(cmd) {
 /** Put cmd first (deduped) and persist; returns the new list. */
 export function recordLocal(serverId, list, cmd) {
   const s = normalizeCommand(cmd)
-  if (!s || !serverId) return list
+  if (!s || !serverId || looksSecret(s) || PROMPT_ANSWER.test(s)) return list
   const next = [s, ...list.filter((c) => c !== s)].slice(0, LOCAL_MAX)
   writeList(LOCAL_PREFIX + serverId, next)
   return next
@@ -69,7 +92,7 @@ export function mergeHistory({ local = [], server = [], pins = [], query = '' })
   const seen = new Set()
   const out = []
   const add = (cmd, source) => {
-    if (!cmd || seen.has(cmd)) return
+    if (!cmd || seen.has(cmd) || looksSecret(cmd)) return
     if (q && !cmd.toLowerCase().includes(q)) return
     seen.add(cmd)
     out.push({ cmd, source, pinned: pins.includes(cmd) })
@@ -93,6 +116,8 @@ export function createLineTracker() {
     /** Feed raw terminal input; returns the lines finished by Enter. */
     feed(data) {
       const done = []
+      // Bracketed paste (bash 5.1+, zsh) wraps pasted text in these markers.
+      data = data.replace(/\x1b\[20[01]~/g, '')
       for (const c of data) {
         if (c === '\r' || c === '\n') {
           if (!dirty && buffer.trim()) done.push(buffer)
@@ -120,7 +145,25 @@ export function createLineTracker() {
   }
 }
 
-/** Bytes to send: Ctrl+U clears whatever is on the line, then the command. */
+/** Bytes to send: Ctrl+E then Ctrl+U clear the whole line, then the command. */
 export function fillSequence(cmd, run = false) {
-  return '\x15' + cmd + (run ? '\r' : '')
+  return '\x05\x15' + cmd + (run ? '\r' : '')
+}
+
+const PASSWORD_PROMPT = /password|passphrase|密码|口令/i
+
+/**
+ * Whether a finished line should be recorded, judged from the screen lines
+ * between where it was typed and where the cursor is now: some line must end
+ * with the command (so the shell echoed it; a password typed at a hidden
+ * prompt is not echoed), that line must not be a password prompt, and no
+ * full-screen program may be running.
+ */
+export function shouldRecord(cmd, screenLines, alternateScreen) {
+  if (alternateScreen) return false
+  const want = cmd.trim()
+  return (screenLines || []).some((line) => {
+    const text = (line || '').trimEnd()
+    return text.endsWith(want) && !PASSWORD_PROMPT.test(text)
+  })
 }
