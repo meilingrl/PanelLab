@@ -238,7 +238,16 @@ def _sources_degraded(settings: Settings, report: feeds.CollectReport) -> bool:
 
 # ---------- 编排 ----------
 
-def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResult:
+_CURRENT_STAGE = "准备"
+
+
+def current_stage() -> str:
+    """The stage the running build is in, for a termination message."""
+    return _CURRENT_STAGE
+
+
+def run_build(settings: Settings, store: Store, llm, now: datetime, progress=None) -> BuildResult:
+    """progress, if given, receives 「开始：<阶段>」 each time a new stage starts."""
     tz = ZoneInfo(settings.timezone)
     issue_date = issue_date_for(now.astimezone(tz))
     issue = issue_date.isoformat()
@@ -249,8 +258,18 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
         since = last.started_at
     build_id = store.start_build(now, issue)
     tracked = _TrackedLLM(llm)
+    global _CURRENT_STAGE
+    _CURRENT_STAGE = "准备"
+
+    def enter(name):
+        global _CURRENT_STAGE
+        if name != _CURRENT_STAGE:
+            _CURRENT_STAGE = name
+            if progress is not None and name != "完成":
+                progress("开始：" + name)
 
     def stage(name, fn, *args):
+        enter(name)
         try:
             return fn(*args)
         except Exception as e:
@@ -279,6 +298,7 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
         status = "degraded" if reasons else "ok"
         # 先以 failed 入库：页面生成成功前中断，期不会被当成已发布
         stage("保存", _persist, store, issue, events, len(hidden), "failed", now)
+        enter("发布")
         try:
             render.render_issue(issue_date, events, hidden, settings, settings.site_dir)
             # render_index 只列已发布的期，所以先改状态再生成首页；失败时改回 failed
@@ -296,6 +316,7 @@ def run_build(settings: Settings, store: Store, llm, now: datetime) -> BuildResu
         except Exception as e:  # 上一期只是补「下一期」链接，失败不影响本期
             warnings.append("上一期页面更新失败：%s" % type(e).__name__)
         stage("清理", store.prune, now)
+        enter("完成")
     except _StageError as e:
         msg = "构建失败（阶段：%s）：%s" % (e.stage, type(e.exc).__name__)
         _finish(store, build_id, "failed", msg)

@@ -1,6 +1,7 @@
 """命令行入口：python -m dailynews --settings PATH <command>。"""
 import argparse
 import os
+import signal
 import sys
 from datetime import datetime
 
@@ -64,6 +65,22 @@ def _iso_time(text):
     return dt
 
 
+def _make_llm(settings, api_key, store, today):
+    from .llm import LLM
+    return LLM(settings.llm, api_key, store, today)
+
+
+def _progress(line):
+    # flush 每一行：作业被超时终止时，Agent 记录里能看到停在哪一步
+    print("[%s] %s" % (datetime.now().strftime("%H:%M:%S"), line), flush=True)
+
+
+def _on_sigterm(signum, frame):
+    from .pipeline import current_stage
+    print("构建被终止（阶段：%s）。多半是作业超时：在 Agent 页面调大这个作业的超时。" % current_stage(), flush=True)
+    sys.exit(143)
+
+
 def _build(args):
     try:
         s = load_settings(args.settings)
@@ -75,21 +92,22 @@ def _build(args):
         print("缺少 %s" % API_KEY_ENV, file=sys.stderr)
         return 2
     from zoneinfo import ZoneInfo
-    from .llm import LLM
     from .pipeline import run_build
     from .store import Store
     now = args.now or datetime.now().astimezone()
     stage = "准备"
     store = None
+    previous = signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         os.makedirs(s.data_dir, exist_ok=True)
         store = Store(os.path.join(s.data_dir, "dailynews.db"))
-        llm = LLM(s.llm, api_key, store, now.astimezone(ZoneInfo(s.timezone)).date())
-        result = run_build(s, store, llm, now)
+        llm = _make_llm(s, api_key, store, now.astimezone(ZoneInfo(s.timezone)).date())
+        result = run_build(s, store, llm, now, progress=_progress)
     except Exception as e:  # 只报阶段和异常类型，异常文字可能含路径或密钥
         print("构建失败（阶段：%s）：%s" % (stage, type(e).__name__))
         return 1
     finally:
+        signal.signal(signal.SIGTERM, previous)
         if store is not None:
             store.close()
     for line in result.lines:
