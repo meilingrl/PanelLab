@@ -242,6 +242,26 @@ def test_watchers_feed_alerts_on_cadence(rig):
     assert a.cpu_watch._above_since is not None  # 100% busy samples arrived
 
 
+def test_ssh_alert_survives_restart_and_recovers_after_quiet_period(rig):
+    st = rig.store()
+    st.put_alert("ssh", "firing", T0.isoformat(), T0.isoformat(),
+                 "SSH 登录失败激增：10 分钟内 80 次")
+    st.close()
+    a = rig.agent()
+    a.tick()
+    assert a.ssh_watch.firing is True
+    assert a.store.get_alert("ssh")["state"] == "firing"
+    for _ in range(29):
+        rig.clock.advance(60)
+        a.tick()
+    assert a.store.get_alert("ssh")["state"] == "firing"
+    rig.clock.advance(60)
+    a.tick()
+    assert a.store.get_alert("ssh")["state"] == "ok"
+    rig.wait_mail(a)
+    assert any("已恢复：SSH 登录失败激增" in s for s in rig.mailer.subjects())
+
+
 def test_failing_phase_does_not_stop_the_tick(rig, capsys):
     def boom():
         raise RuntimeError("mounts exploded")

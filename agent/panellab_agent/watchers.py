@@ -23,7 +23,7 @@ DEFAULTS = {
     "sustain_minutes": 10,
     "recover_below_percent": 90,
     "recover_minutes": 5,
-    "ssh_failures": 30,
+    "ssh_failures": 60,
     "ssh_window_minutes": 10,
     "ssh_enabled": True,
 }
@@ -293,34 +293,95 @@ def default_ssh_lines(since: datetime) -> List[str]:
         return []
 
 
-class SshWatch:
-    """Counts failed SSH logins per source IP in a sliding window.
+# Some sshd builds log as sshd-session[pid] / sshd-auth[pid]; any "[pid]:" works.
+_PID = re.compile(r"\[(\d+)\]:")
 
-    Each matching log line counts once. One login attempt by a non-existent
-    user often logs both ``Invalid user`` and ``Failed password``, so counts can
-    double; that is acceptable for a threshold alarm.
+SSH_RECOVER_MINUTES = 30
+SSH_GAP_RESET_S = 3 * 60
+
+
+def ssh_recover_level(threshold: int) -> int:
+    """Count that must not be reached for the alert to start recovering."""
+    return max(1, threshold // 2)
+
+
+def count_ssh_attempts(lines: List[str]) -> Counter:
+    """Failed SSH login attempts per source IP.
+
+    One attempt usually logs several lines (``Invalid user``, ``Failed password
+    for invalid user`` and a ``pam_unix ... authentication failure``), all from
+    the same sshd process. Lines are grouped by (sshd PID, IP) and a group
+    counts as many attempts as its most frequent kind of line, so a connection
+    that tried three passwords counts three, not nine. Lines without a PID
+    count once each.
+    """
+    groups: Dict[Tuple[str, str], Counter] = {}
+    counts: Counter = Counter()
+    for line in lines:
+        for kind, pat in enumerate(SSH_PATTERNS):
+            m = pat.search(line)
+            if m:
+                ip = m.group("ip")
+                pid = _PID.search(line)
+                if pid is None:
+                    counts[ip] += 1
+                else:
+                    groups.setdefault((pid.group(1), ip), Counter())[kind] += 1
+                break
+    for (_pid, ip), kinds in groups.items():
+        counts[ip] += max(kinds.values())
+    return counts
+
+
+class SshWatch:
+    """Counts failed SSH login attempts per source IP in a sliding window.
+
+    Fires when the window total reaches ``ssh_failures``. Recovers only after
+    the total stays below half the trigger (``ssh_recover_level``) for
+    ``SSH_RECOVER_MINUTES``, so bursty background scanning does not send a
+    trigger/recovery pair per burst. A gap between checks longer than 3
+    minutes restarts the recovery timer.
     """
 
     def __init__(self, read_lines: Callable[[datetime], List[str]] = default_ssh_lines) -> None:
         self._read_lines = read_lines
+        self.firing = False
+        self._below_since: Optional[datetime] = None
+        self._last: Optional[datetime] = None
 
     def check(self, now: datetime, cfg: Optional[dict] = None) -> Tuple[bool, str, str]:
         minutes = int(_cfg(cfg, "ssh_window_minutes"))
         if not _cfg(cfg, "ssh_enabled"):
+            self.firing = False
+            self._below_since = None
+            self._last = None
             return False, "SSH 登录失败监控已关闭", ""
         threshold = int(_cfg(cfg, "ssh_failures"))
-        counts: Counter = Counter()
-        for line in self._read_lines(now - timedelta(minutes=minutes)):
-            for pat in SSH_PATTERNS:
-                m = pat.search(line)
-                if m:
-                    counts[m.group("ip")] += 1
-                    break
+        recover = ssh_recover_level(threshold)
+        counts = count_ssh_attempts(self._read_lines(now - timedelta(minutes=minutes)))
         total = sum(counts.values())
+        if self._last is not None and (now - self._last).total_seconds() > SSH_GAP_RESET_S:
+            self._below_since = None
+        self._last = now
+        if not self.firing:
+            if total >= threshold:
+                self.firing = True
+                self._below_since = None
+        elif total < recover:
+            if self._below_since is None:
+                self._below_since = now
+            if now - self._below_since >= timedelta(minutes=SSH_RECOVER_MINUTES):
+                self.firing = False
+                self._below_since = None
+        else:
+            self._below_since = None
         subject = "SSH 登录失败激增：%d 分钟内 %d 次" % (minutes, total)
         rows = ["%s  %d" % (ip, n) for ip, n in counts.most_common(5)]
-        body = "来源 IP 与失败次数（最多 5 个）：\n" + "\n".join(rows) if rows else ""
-        return total >= threshold, subject, body
+        lines = ["告警阈值 %d 次；%d 分钟内低于 %d 次并持续 %d 分钟后恢复。" % (
+            threshold, minutes, recover, SSH_RECOVER_MINUTES)]
+        if rows:
+            lines += ["", "来源 IP 与失败次数（最多 5 个）："] + rows
+        return self.firing, subject, "\n".join(lines)
 
 
 # ---------------------------------------------------------------- heartbeat
