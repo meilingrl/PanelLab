@@ -6,7 +6,7 @@ const props = defineProps({ serverId: { type: Number, required: true } })
 const emit = defineEmits(['saved', 'cancel'])
 const THRESHOLDS = [
   ['disk_percent', '磁盘使用率（%）', 1, 100, '磁盘', 90], ['cpu_percent', 'CPU 使用率（%）', 1, 100, 'CPU', 95], ['mem_percent', '内存使用率（%）', 1, 100, '内存', 95],
-  ['sustain_minutes', '持续分钟数', 1, 1440, '持续分钟数', 10], ['ssh_failures', 'SSH 登录失败次数', 1, 100000, 'SSH 失败次数', 30],
+  ['sustain_minutes', '持续分钟数', 1, 1440, '持续分钟数', 10], ['ssh_failures', 'SSH 登录失败次数', 1, 100000, 'SSH 失败次数', 60],
 ]
 // Provider presets, keyed by the (lower-case) domain of the address. All use implicit TLS on 465.
 const QQ_HINT = 'QQ 邮箱网页版 → 设置 → 账号与安全 → 开启 SMTP 服务并生成授权码'

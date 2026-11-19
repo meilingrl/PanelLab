@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from panellab_agent.clock import FakeClock
 from panellab_agent.watchers import (
-    DiskWatch, Heartbeat, SshWatch, SustainedWatch, read_cpu_percent,
-    read_mem_percent,
+    SSH_RECOVER_MINUTES, DiskWatch, Heartbeat, SshWatch, SustainedWatch,
+    count_ssh_attempts, read_cpu_percent, read_mem_percent, ssh_recover_level,
 )
 
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
@@ -170,6 +170,112 @@ def test_ssh_below_threshold_not_firing():
     w = SshWatch(lambda since: ssh_lines(30, 0))
     assert w.check(T0, {"ssh_failures": 31})[0] is False
     assert w.check(T0, {"ssh_failures": 30})[0] is True
+
+
+def _invalid_user_attempt(pid, ip, user="admin"):
+    """The three lines sshd logs for one password try by a non-existent user."""
+    p = "2026-11-10T11:55:00+0000 h sshd[%d]: " % pid
+    return [p + "Invalid user %s from %s port 4242" % (user, ip),
+            p + "pam_unix(sshd:auth): check pass; user unknown",
+            p + "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 "
+                "tty=ssh ruser= rhost=%s" % ip,
+            p + "Failed password for invalid user %s from %s port 4242 ssh2" % (user, ip)]
+
+
+def test_ssh_counts_attempts_not_lines():
+    lines = _invalid_user_attempt(100, "5.5.5.5") + _invalid_user_attempt(101, "5.5.5.5")
+    # One connection trying three passwords for an existing user: 6 lines, 3 attempts.
+    p = "2026-11-10T11:56:00+0000 h sshd-session[200]: "
+    for _ in range(3):
+        lines.append(p + "pam_unix(sshd:auth): authentication failure; logname= uid=0 "
+                         "euid=0 tty=ssh ruser= rhost=6.6.6.6  user=root")
+        lines.append(p + "Failed password for root from 6.6.6.6 port 1 ssh2")
+    # Lines without a PID still count one each.
+    lines.append("Nov 10 11:57:00 h sshd: Invalid user x from 7.7.7.7 port 2")
+    lines.append("Nov 10 11:57:01 h sshd: Invalid user y from 7.7.7.7 port 3")
+    counts = count_ssh_attempts(lines)
+    assert counts == {"5.5.5.5": 2, "6.6.6.6": 3, "7.7.7.7": 2}
+    w = SshWatch(lambda since: lines)
+    firing, subject, _ = w.check(T0, {"ssh_failures": 7})
+    assert firing is True and subject == "SSH 登录失败激增：10 分钟内 7 次"
+
+
+def test_ssh_same_pid_different_ips_counted_separately():
+    lines = _invalid_user_attempt(9, "1.1.1.1") + _invalid_user_attempt(9, "2.2.2.2")
+    assert count_ssh_attempts(lines) == {"1.1.1.1": 1, "2.2.2.2": 1}
+
+
+def _attempts(n):
+    out = []
+    for i in range(n):
+        out += _invalid_user_attempt(1000 + i, "8.8.8.%d" % (i % 4))
+    return out
+
+
+def test_ssh_hysteresis_needs_sustained_quiet_to_recover():
+    state = {"n": 0}
+    w = SshWatch(lambda since: _attempts(state["n"]))
+    cfg = {"ssh_failures": 20}  # recovery level: below 10
+    t = T0
+
+    def step(n, minutes=1):
+        nonlocal t
+        state["n"] = n
+        t += timedelta(minutes=minutes)
+        return w.check(t, cfg)[0]
+
+    assert step(19) is False
+    assert step(20) is True
+    assert step(15) is True  # below trigger but not below the recovery level
+    for _ in range(SSH_RECOVER_MINUTES - 1):
+        assert step(9) is True
+    assert step(25) is True  # a new burst restarts the quiet period
+    for _ in range(SSH_RECOVER_MINUTES):
+        assert step(3) is True
+    assert step(3) is False  # 30 minutes below 10
+    assert step(19) is False and step(20) is True
+
+
+def test_ssh_recovery_body_mentions_rule():
+    w = SshWatch(lambda since: _attempts(2))
+    _, _, body = w.check(T0, {})
+    assert "告警阈值 60 次" in body and "低于 30 次并持续 30 分钟后恢复" in body
+    assert "8.8.8.0  1" in body
+
+
+def test_ssh_gap_between_checks_restarts_recovery_timer():
+    state = {"n": 30}
+    w = SshWatch(lambda since: _attempts(state["n"]))
+    cfg = {"ssh_failures": 30}
+    assert w.check(T0, cfg)[0] is True
+    state["n"] = 0
+    assert w.check(T0 + timedelta(minutes=1), cfg)[0] is True
+    # Agent paused for an hour: the old quiet start no longer counts.
+    assert w.check(T0 + timedelta(minutes=61), cfg)[0] is True
+    for m in range(62, 91):
+        assert w.check(T0 + timedelta(minutes=m), cfg)[0] is True
+    assert w.check(T0 + timedelta(minutes=91), cfg)[0] is False
+
+
+def test_ssh_restored_firing_recovers_only_after_quiet_period():
+    w = SshWatch(lambda since: [])
+    w.firing = True
+    for m in range(30):
+        assert w.check(T0 + timedelta(minutes=m), {})[0] is True
+    assert w.check(T0 + timedelta(minutes=30), {})[0] is False
+
+
+def test_ssh_recover_level_is_half_trigger():
+    assert ssh_recover_level(60) == 30
+    assert ssh_recover_level(31) == 15
+    assert ssh_recover_level(1) == 1
+
+
+def test_ssh_disabled_clears_firing():
+    w = SshWatch(lambda since: _attempts(60))
+    assert w.check(T0, {})[0] is True
+    assert w.check(T0, {"ssh_enabled": False})[0] is False
+    assert w.firing is False
 
 
 def test_ssh_disabled_does_not_read():

@@ -380,13 +380,15 @@ class Agent:
     # ---- startup recovery ---------------------------------------------------
 
     def _seed_watches(self) -> None:
-        """Resume resource alerts that were firing before a restart, so they can recover."""
+        """Resume resource and SSH alerts that were firing before a restart, so they can recover."""
         for alert in self.store.firing_alerts():
             key = alert["key"]
             if key == "cpu":
                 self.cpu_watch.firing = True
             elif key == "mem":
                 self.mem_watch.firing = True
+            elif key == "ssh":
+                self.ssh_watch.firing = True
             elif key.startswith("disk:"):
                 self.disk_watch.restore_firing(key[len("disk:"):])
 
